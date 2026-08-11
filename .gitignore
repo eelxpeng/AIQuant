@@ -1,0 +1,21 @@
+# Credentials — never commit, in any project
+.env
+.env.*
+*.key
+*.pem
+secrets/
+credentials.*
+
+# Large artifacts — keep the pointer and the hash in git, not the bytes
+*.parquet
+*.pcap
+*.h5
+*.pt
+*.onnx
+*.csv.gz
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
