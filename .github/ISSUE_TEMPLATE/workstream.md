@@ -6,7 +6,7 @@ labels: ''
 assignees: ''
 ---
 
-Goal: <which measurable deliverable this advances — one sentence; it must trace to the master roadmap issue>
+Goal: <which measurable deliverable this advances — one sentence; it must trace to a deliverable in master roadmap #1>
 
 Done means: <a condition someone can test — one line; use a short bullet list only when one line is not enough, and keep every bullet testable; for spec-backed work, cite the spec's success criteria instead of restating them>
 
@@ -21,7 +21,7 @@ looks like one PR. -->
 
 <!-- Filled-in example:
 
-Goal: hit the Phase 1 deliverable "replay reproduces a recorded session byte-identically".
+Goal: hit the Phase 0 deliverable D0.2 "replay reproduces a recorded session byte-identically" (#1).
 
 Done means:
 - `cargo test -p engine --test replay` reproduces the 10k-event fixture with zero diff, and

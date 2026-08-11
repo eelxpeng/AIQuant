@@ -18,6 +18,8 @@ This workspace is `ultra_trade` — the real-time quantitative trading system.
 - Read `.specify/memory/constitution.md` before behavior, architecture, risk, or test changes.
 - Read `docs/ARCHITECTURE.md` before changing a crate boundary or adding a seam.
 - Read `CONTEXT.md` before introducing a domain noun. If your term is not there, add it (with its `_Avoid_:` line) in the same PR.
+- Repo is `eelxpeng/AIQuant`; this project is its `ultra_trade/` subdirectory. `gh` targets that repo, and CI path filters and issue templates are relative to the repo root one level up.
+- Roadmap, phases, and status live in GitHub issues — master roadmap **#1** and its phase hubs. Never in a checked-in file; a workstream's status is its issue's open/closed state.
 - Start implementation from a GitHub issue and its owning spec. If no spec owns the behavior, update the spec first or state the scope exception explicitly.
 
 ## Core Behavior

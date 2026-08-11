@@ -148,8 +148,9 @@ line.
 
 ## Governance
 
-Roadmap, phases, and execution status are owned by GitHub issues (the master
-roadmap issue and its phase hubs), never by a checked-in status document.
+Roadmap, phases, and execution status are owned by GitHub issues in
+`eelxpeng/AIQuant` (master roadmap #1 and its phase hubs), never by a
+checked-in status document.
 Design source of truth is `docs/`. Behavior contracts are the specs under
 `specs/`.
 
