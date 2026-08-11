@@ -9,7 +9,10 @@ description: "Task list template for feature implementation"
 
 **Prerequisites**: plan.md (required), spec.md (required for user stories), research.md, data-model.md, contracts/
 
-**Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
+**Tests**: MANDATORY. Constitution Principle IV is non-negotiable: every task list
+MUST require RED tests written and observed FAILING before any implementation
+task begins. Tests are never optional and never "only if requested". Every
+fail-closed branch and error arm needs a test that actually reaches it.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
@@ -55,22 +58,24 @@ description: "Task list template for feature implementation"
 
 ---
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 2: RED Tests (Blocking Prerequisites)
 
-**Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
+**Purpose**: Every required test written and observed FAILING, before any
+implementation exists
 
-**⚠️ CRITICAL**: No user story work can begin until this phase is complete
+**⚠️ CRITICAL**: No implementation task may begin until this phase is complete
+and the tests fail for the expected reasons (Constitution IV).
 
-Examples of foundational tasks (adjust based on your project):
+Examples (adjust to the feature):
 
-- [ ] T004 Setup database schema and migrations framework
-- [ ] T005 [P] Implement authentication/authorization framework
-- [ ] T006 [P] Setup API routing and middleware structure
-- [ ] T007 Create base models/entities that all stories depend on
-- [ ] T008 Configure error handling and logging infrastructure
-- [ ] T009 Setup environment configuration management
+- [ ] T004 [P] RED contract test for [INV-00N] in crates/[crate]/tests/[feature].rs
+- [ ] T005 [P] RED replay/golden fixture for [scenario] in fixtures/[feature]/
+- [ ] T006 [P] RED failure-mode test reaching the [error arm] in crates/[crate]/tests/[feature].rs
+- [ ] T007 [P] RED compatibility test for [record/fixture version], or record N/A in plan.md
+- [ ] T008 Run the focused test command; record which tests fail and why
 
-**Checkpoint**: Foundation ready - user story implementation can now begin in parallel
+**Checkpoint**: RED tests reviewed and failing for the expected reasons —
+implementation may now begin
 
 ---
 
@@ -80,9 +85,11 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Tests for User Story 1 (OPTIONAL - only if tests requested) ⚠️
+### Tests for User Story 1 (MANDATORY) ⚠️
 
-> **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
+> **These must already exist and be FAILING from Phase 2. Add only
+> scenario-specific RED tests here that Phase 2 did not cover. Implementation
+> below may not start until they fail for the expected reasons.**
 
 - [ ] T010 [P] [US1] Contract test for [endpoint] in tests/contract/test_[name].py
 - [ ] T011 [P] [US1] Integration test for [user journey] in tests/integration/test_[name].py
@@ -106,7 +113,7 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Tests for User Story 2 (OPTIONAL - only if tests requested) ⚠️
+### Tests for User Story 2 (MANDATORY) ⚠️
 
 - [ ] T018 [P] [US2] Contract test for [endpoint] in tests/contract/test_[name].py
 - [ ] T019 [P] [US2] Integration test for [user journey] in tests/integration/test_[name].py
@@ -128,7 +135,7 @@ Examples of foundational tasks (adjust based on your project):
 
 **Independent Test**: [How to verify this story works on its own]
 
-### Tests for User Story 3 (OPTIONAL - only if tests requested) ⚠️
+### Tests for User Story 3 (MANDATORY) ⚠️
 
 - [ ] T024 [P] [US3] Contract test for [endpoint] in tests/contract/test_[name].py
 - [ ] T025 [P] [US3] Integration test for [user journey] in tests/integration/test_[name].py
@@ -154,7 +161,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX [P] Documentation updates in docs/
 - [ ] TXXX Code cleanup and refactoring
 - [ ] TXXX Performance optimization across all stories
-- [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
+- [ ] TXXX [P] Additional unit tests in crates/[crate]/tests/
 - [ ] TXXX Security hardening
 - [ ] TXXX Run quickstart.md validation
 
@@ -165,21 +172,21 @@ Examples of foundational tasks (adjust based on your project):
 ### Phase Dependencies
 
 - **Setup (Phase 1)**: No dependencies - can start immediately
-- **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
-- **User Stories (Phase 3+)**: All depend on Foundational phase completion
+- **RED Tests (Phase 2)**: Depends on Setup completion - BLOCKS all implementation
+- **User Stories (Phase 3+)**: All depend on RED tests failing for the expected reasons
   - User stories can then proceed in parallel (if staffed)
   - Or sequentially in priority order (P1 → P2 → P3)
 - **Polish (Final Phase)**: Depends on all desired user stories being complete
 
 ### User Story Dependencies
 
-- **User Story 1 (P1)**: Can start after Foundational (Phase 2) - No dependencies on other stories
-- **User Story 2 (P2)**: Can start after Foundational (Phase 2) - May integrate with US1 but should be independently testable
-- **User Story 3 (P3)**: Can start after Foundational (Phase 2) - May integrate with US1/US2 but should be independently testable
+- **User Story 1 (P1)**: Can start after Phase 2 RED tests fail - No dependencies on other stories
+- **User Story 2 (P2)**: Can start after Phase 2 RED tests fail - May integrate with US1 but should be independently testable
+- **User Story 3 (P3)**: Can start after Phase 2 RED tests fail - May integrate with US1/US2 but should be independently testable
 
 ### Within Each User Story
 
-- Tests (if included) MUST be written and FAIL before implementation
+- RED tests MUST be written and observed FAILING before implementation (never optional)
 - Models before services
 - Services before endpoints
 - Core implementation before integration
