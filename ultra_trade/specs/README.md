@@ -8,7 +8,19 @@ feature must prove *before* implementation starts.
 `specs/<issue-number>-<short-name>/` — after the feature's GitHub issue number.
 
 Issue numbers are globally unique, so two agents working in parallel can never
-collide on a spec id. Never use sequential numbers.
+collide on a spec id. Sequential numbers can, and they carry no link back to the
+work item.
+
+Spec Kit defaults to sequential numbering, so the issue number must be passed
+explicitly:
+
+```sh
+.specify/scripts/bash/create-new-feature.sh \
+  --number <issue> --short-name <short-name> "<description>"
+```
+
+Numbers under 100 are zero-padded (issue #2 → `specs/002-event-log/`). That is
+expected; the number is still the issue number.
 
 ## Required spec shape
 

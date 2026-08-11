@@ -71,7 +71,7 @@ Hot path = market-data event in → order out.
 ## Spec Kit
 
 - Flow: `/speckit-specify` → `/speckit-clarify` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` → `/speckit-implement`.
-- Feature directories are `specs/<issue-number>-<short-name>/`. Never sequential numbers — issue numbers cannot collide between parallel agents.
+- Feature directories are `specs/<issue-number>-<short-name>/`, numbered by the GitHub issue. **This overrides the `/speckit-specify` default and the `feature_numbering: sequential` setting in `.specify/init-options.json`** — pass the issue explicitly: `.specify/scripts/bash/create-new-feature.sh --number <issue> --short-name <name> "<description>"`. Issue numbers cannot collide between parallel agents; sequential ones can. Spec Kit zero-pads under 100 (issue #2 → `specs/002-event-log/`); that is expected, and the number is still the issue.
 - Specs must include invariants, event examples, failure modes, replay behavior, and mandatory RED tests. Full shape in `specs/README.md`.
 - Before coding, name the issue, owning spec, scenario, invariant, required tests, and task IDs.
 - Do not tick a spec task unless every noun and verb in it is implemented. Leave partial tasks open with a NOTE on the landed subset.
