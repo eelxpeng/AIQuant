@@ -26,6 +26,18 @@ A fixed-point quantity in the instrument's lot convention. Signed only where the
 type says so; unsigned quantity plus an explicit `Side` is preferred.
 _Avoid_: Position, exposure, notional
 
+**Bar**:
+An aggregate over trades or quotes under a stated convention — time, volume,
+dollar, tick-imbalance. A convention, never a market fact. Built by
+`marketdata`'s machinery from a configured definition; never by a strategy.
+_Avoid_: Candle as a fact, tick, trade print
+
+**Complete Bar**:
+A bar whose window has closed, so its values can no longer change. Only complete
+bars are visible to a strategy — exposing an incomplete one as complete is
+look-ahead.
+_Avoid_: Current bar, forming bar, latest bar
+
 **Top Of Book**:
 The best bid and best ask with their sizes, at a stated event timestamp.
 _Avoid_: Depth, last trade, mid
@@ -111,6 +123,19 @@ _Avoid_: Exchange time, monotonic time
 The injected local monotonic clock, used for elapsed-time and timeout logic.
 Never compared to exchange or receive time.
 _Avoid_: Wall clock, exchange time
+
+**Current Event Time**:
+The exchange timestamp of the event a component is processing right now. This is
+what a strategy reads instead of a clock. It is deterministic by construction and
+makes look-ahead structurally impossible: nothing can observe a time later than
+the event in hand.
+_Avoid_: Now, wall clock, exchange time in general
+
+**Timer Event**:
+A wake-up a strategy requested for a future instant, delivered as an ordinary
+event. Both the request and the firing are in the log, so both replay. This is
+how a strategy acts when no market data arrives.
+_Avoid_: Timeout, sleep, scheduled task
 
 **Tick-To-Trade**:
 The elapsed monotonic time from a market-data event entering the process to its
