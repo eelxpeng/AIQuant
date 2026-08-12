@@ -17,14 +17,22 @@ convention that every rounding decision uses.
 _Avoid_: Symbol string, underlying asset, venue ticker
 
 **Px**:
-A fixed-point price in the instrument's quoting convention. Never a float, never
-compared with a tolerance.
+A fixed-point price in the instrument's quoting convention — `i64` at `1e-9`
+scale (ADR #4). Never a float, never compared with a tolerance. Adding a `Px` to
+a `Qty` does not compile.
 _Avoid_: f64 price, notional value, mark
 
 **Qty**:
-A fixed-point quantity in the instrument's lot convention. Signed only where the
-type says so; unsigned quantity plus an explicit `Side` is preferred.
+A fixed-point quantity in the instrument's lot convention — `i64` at `1e-9`
+scale (ADR #4), which admits fractional shares. Signed only where the type says
+so; unsigned quantity plus an explicit `Side` is preferred.
 _Avoid_: Position, exposure, notional
+
+**Notional**:
+The money value of a price times a quantity — `i128` at `1e-9` scale (ADR #4).
+Wider than `Px` and `Qty` because cumulative traded value overflows 64 bits on an
+ordinary day. The only type produced by multiplying the other two.
+_Avoid_: Px, exposure, position value at an unstated mark
 
 **Bar**:
 An aggregate over trades or quotes under a stated convention — time, volume,
