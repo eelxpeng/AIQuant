@@ -183,8 +183,28 @@ _Avoid_: Threshold, budget, guard
 
 **Kill Switch**:
 The operator control that halts new orders and, per its spec, cancels resting
-ones. It MUST work from every system state.
+ones. It MUST work from every system state, and MUST have at least one path that
+does not depend on the client process being alive.
 _Avoid_: Shutdown, pause, circuit breaker
+
+**Command Event**:
+An operator action recorded in the event log as an input to the session — the
+only way a client reaches the engine. Because it lives in the log, replay
+reproduces it and the audit trail exists with no separate logging path. The v1
+set is exactly halt, resume, kill switch, and flatten.
+_Avoid_: RPC call, control message, engine API
+
+**Reduce-Only Order**:
+An order that can only decrease `|position|`. The risk gate treats it
+differently from a risk-increasing order: permitting it is strictly less risky
+than blocking it, so it survives conditions that reject a normal order.
+_Avoid_: Closing order, hedge, cancellation
+
+**Flatten**:
+The command that drives every position to zero by emitting reduce-only orders.
+The only command in the control surface that creates orders, and therefore the
+only one that meets the risk gate.
+_Avoid_: Kill switch, halt, liquidation
 
 **Halt**:
 The state entered when an invariant is violated (reconciliation divergence,
