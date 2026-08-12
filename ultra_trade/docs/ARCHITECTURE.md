@@ -192,9 +192,10 @@ already requires of models.
 Each of these should become an issue, then an ADR under `docs/adr/` or a spec
 decision record before the code that depends on it lands.
 
-- [ ] **Fixed-point representation**: scaled `i64` vs. a decimal crate. Drives every arithmetic site. **BLOCKS PHASE 0** — needs an ADR before D0.1 `types` starts.
+- [x] ~~**Fixed-point representation**~~ — decided: `Px`/`Qty` are `i64` @ `1e-9`, `Notional` is `i128` @ `1e-9`, as three distinct newtypes. See [`adr/4-fixed-point-representation.md`](adr/4-fixed-point-representation.md) (#4). Phase 0 is unblocked.
 - [ ] **Runtime model**: single-threaded event loop with pinned core, vs. async, vs. thread-per-stage with SPSC queues. *Forced by: the first `engine` loop (D0.2 / Phase 1).*
 - [ ] **Event log durability**: in-memory ring + async persist, vs. synchronous append. Drives the crash-recovery contract. *Forced by: the event-log spec (D0.2).*
+- [ ] **Record format versioning**: every event log record must carry a format version from the first release, so a representation change is a supported migration rather than a break. *Forced by: the event-log spec (D0.2) — retrofitting after logs exist is the expensive order. Raised by ADR #4.*
 - [ ] **Order ID scheme and idempotency on reconnect**. *Forced by: the OMS spec (Phase 2, D2.1).*
 - [ ] **Position reconciliation policy**: how internal-vs-venue divergence halts trading, and how it resumes. *Forced by: the reconciliation spec (Phase 2, D2.4).*
 - [ ] **Which venue/feed adapter lands first**, and what its integration smoke proves. *Forced by: Phase 4, D4.1.*
