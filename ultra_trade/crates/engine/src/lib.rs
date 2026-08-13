@@ -249,6 +249,19 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         &self.venue
     }
 
+    /// Consumes the engine and hands back its log.
+    ///
+    /// Consuming rather than lending `&mut`: a mutable log would let a caller
+    /// append records the engine never decided, which is a different bypass
+    /// from the risk gate's but the same kind of mistake. Taking the engine
+    /// apart is only reasonable once the session is over, and then it is the
+    /// only way to flush a file-backed log and find out whether the flush
+    /// worked.
+    #[inline]
+    pub fn into_log(self) -> L {
+        self.log
+    }
+
     /// Whether any reserved buffer is full, so the next event may allocate.
     ///
     /// Reported rather than enforced: growing costs an allocation, and a caller
