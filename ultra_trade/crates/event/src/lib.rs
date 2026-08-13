@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod codec;
 mod inbound;
 mod log;
 mod outbound;
