@@ -1,0 +1,134 @@
+# The gate that blocks merge for ultra_trade.
+#
+# It runs exactly the three commands AGENTS.md names as the gate, plus the two
+# guarantees the constitution makes about how they run:
+#
+#   - Principle VIII: a default `cargo test --workspace` is safe to run on any
+#     machine, offline, with no credentials present.
+#   - The pinned toolchain: the gate's verdict must not depend on whose
+#     toolchain produced it, so `rust-toolchain.toml` decides and the run
+#     records which one it got.
+#
+# Paths are relative to the repository root, one level above the project.
+
+name: ultra_trade gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ultra_trade/**'
+      - '.github/workflows/ultra-trade.yml'
+  pull_request:
+    paths:
+      - 'ultra_trade/**'
+      - '.github/workflows/ultra-trade.yml'
+
+# Least privilege: the gate reads the tree and reports a status. It has no
+# reason to write to the repository.
+permissions:
+  contents: read
+
+# A superseded run proves nothing about the commit that replaced it.
+concurrency:
+  group: ultra-trade-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: ultra_trade
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace turns "a test panicked" into "a test panicked here".
+  RUST_BACKTRACE: 1
+
+jobs:
+  gate:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `rust-toolchain.toml` pins the version and its components; this forces
+      # the install up front and prints what the gate is about to judge with.
+      - name: Resolve the pinned toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+
+      # Keyed on the lockfile: a dependency change must not be judged against a
+      # cache built from different sources. `actions/cache` rather than a
+      # third-party caching action, to keep this workflow's supply chain to
+      # first-party actions only.
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ultra_trade/target
+          key: ultra-trade-${{ runner.os }}-cargo-${{ hashFiles('ultra_trade/Cargo.lock', 'ultra_trade/rust-toolchain.toml') }}
+          restore-keys: ultra-trade-${{ runner.os }}-cargo-
+
+      # The one place the network is allowed. Everything after this runs
+      # `--offline`, so a test that needed a fetch would fail here rather than
+      # passing quietly on a machine that happened to have one.
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets --locked --offline -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked --offline
+
+      # The end-to-end wiring, not just the units: a binary that stops running
+      # is a broken seam even when every crate's tests pass.
+      - name: Backtest smoke
+        run: cargo run -p backtest --locked --offline
+
+  repeatability:
+    name: allocation counter, 20 runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: gate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ultra_trade/target
+          key: ultra-trade-${{ runner.os }}-cargo-${{ hashFiles('ultra_trade/Cargo.lock', 'ultra_trade/rust-toolchain.toml') }}
+          restore-keys: ultra-trade-${{ runner.os }}-cargo-
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      # The zero-allocation proof installs a global allocator and counts across
+      # the whole process, so its result depends on what else the test harness
+      # is doing. AGENTS.md: a test whose result depends on timing or
+      # concurrency is not proven by one green run — cite the streak.
+      - name: Repeat the zero-allocation proof
+        run: |
+          cargo build --tests -p engine --locked --offline
+          for run in $(seq 1 20); do
+            echo "--- run $run/20 ---"
+            cargo test -p engine --test no_alloc --locked --offline -- --exact \
+              a_warmed_engine_does_not_allocate_while_processing_an_event
+          done
+          echo "20/20 clean"
