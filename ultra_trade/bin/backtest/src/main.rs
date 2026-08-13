@@ -64,8 +64,10 @@ fn usage() -> ! {
     eprintln!("usage: backtest <recorded.log> [max-position] [max-order-notional]");
     eprintln!();
     eprintln!("  recorded.log         a session written by `record` or `paper`");
-    eprintln!("  max-position         largest |position|, as a decimal (default 1000000)");
-    eprintln!("  max-order-notional   largest single order, as a decimal (default 1000000000)");
+    eprintln!("  max-position         largest |position|, as a decimal (default 1000)");
+    eprintln!("  max-order-notional   largest single order, as a decimal (default 1000000)");
+    eprintln!();
+    eprintln!("defaults match `paper`, so backtesting a paper recording reproduces it.");
     eprintln!();
     eprintln!("produce one with:");
     eprintln!("  cargo run -p record -- session.log");
@@ -83,7 +85,7 @@ fn main() {
     if args.len() > 3 {
         usage();
     }
-    let max_position = Qty::from_decimal(args.get(1).map(String::as_str).unwrap_or("1000000"))
+    let max_position = Qty::from_decimal(args.get(1).map(String::as_str).unwrap_or("1000"))
         .unwrap_or_else(|e| fail("max-position", e));
     let max_order_notional =
         Px::from_decimal(args.get(2).map(String::as_str).unwrap_or("1000000000"))
@@ -116,13 +118,17 @@ fn main() {
         limits
             .set(
                 instrument.id(),
+                // These match `paper`'s defaults exactly, so backtesting a
+                // paper recording reproduces it rather than diverging on a
+                // policy difference nobody chose. Override the two that most
+                // often need it from the command line.
                 Limits {
                     max_position,
-                    max_exposure: money(1_000_000_000),
+                    max_exposure: money(10_000_000),
                     max_order_notional,
-                    max_orders_in_window: 1_000,
-                    rate_window: ExchangeSpan::from_nanos(STEP_NANOS),
-                    max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 60),
+                    max_orders_in_window: 60,
+                    rate_window: ExchangeSpan::from_nanos(STEP_NANOS * 60),
+                    max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 30),
                 },
             )
             .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
@@ -143,7 +149,8 @@ fn main() {
         ExchangeSpan::from_nanos(0),
     );
 
-    let recorded_decisions = feed.recorded_decisions().len();
+    let recorded_by_the_session = feed.recorded_decisions().to_vec();
+    let recorded_decisions = recorded_by_the_session.len();
     let recorded_orders = feed
         .recorded_decisions()
         .iter()
@@ -227,6 +234,26 @@ fn main() {
     println!("the recorded session, for comparison");
     println!("  decisions          {recorded_decisions}");
     println!("  orders submitted   {recorded_orders}");
+    // What the recorded session refused, and why. Without this a difference in
+    // order counts is a mystery — and the usual cause is that the two runs are
+    // under different limits, which is a fact about the comparison rather than
+    // about the strategy.
+    let mut recorded_refusals: Vec<(event::RiskReason, usize)> = Vec::new();
+    for outbound in recorded_by_the_session.iter() {
+        if let Outbound::IntentRejected { reason, .. } = outbound {
+            match recorded_refusals.iter_mut().find(|(r, _)| r == reason) {
+                Some(entry) => entry.1 += 1,
+                None => recorded_refusals.push((*reason, 1)),
+            }
+        }
+    }
+    println!(
+        "  intents refused    {}",
+        recorded_refusals.iter().map(|(_, n)| n).sum::<usize>()
+    );
+    for (reason, count) in &recorded_refusals {
+        println!("      {reason:?}: {count}");
+    }
     if recorded_orders == summary.orders_submitted {
         println!("  -> same order count as this run");
     } else {

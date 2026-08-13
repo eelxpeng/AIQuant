@@ -154,6 +154,19 @@ impl Strategy for MovingAverageCrossover {
                 self.working -= signed;
             }
 
+            StrategyEvent::IntentRefused {
+                instrument,
+                side,
+                qty,
+                ..
+            } => {
+                if instrument != self.instrument {
+                    return;
+                }
+                // Nothing was created, so nothing is working.
+                self.working -= side.sign() as i128 * qty.to_scaled() as i128;
+            }
+
             StrategyEvent::OrderDone {
                 instrument,
                 side,
@@ -446,5 +459,136 @@ mod tests {
         feed_bar(&mut s, 200);
         assert_eq!(s.closes.len(), 3);
         assert_eq!(s.sum, 400i128 * SCALE as i128);
+    }
+}
+
+#[cfg(test)]
+mod refusals {
+    //! A strategy that tracks in-flight quantity has to survive a refusal.
+    //!
+    //! This is the bug a live session found: every test before it passed
+    //! because no limit ever bound, and the moment one did the strategy went
+    //! quietly wrong and stayed wrong.
+
+    use super::*;
+    use crate::{Context, StrategyEvent};
+    use event::{Intent, RiskReason};
+    use marketdata::Bar;
+    use types::{ExchangeTime, Notional, Timestamp};
+
+    const SCALE: i64 = types::SCALE;
+    const INSTRUMENT: InstrumentId = InstrumentId::new(0);
+    const SUB: BarSubscription = BarSubscription::from_index(0);
+
+    fn bar(close: i64) -> Bar {
+        Bar {
+            instrument: INSTRUMENT,
+            open: Px::from_scaled(close * SCALE),
+            high: Px::from_scaled(close * SCALE),
+            low: Px::from_scaled(close * SCALE),
+            close: Px::from_scaled(close * SCALE),
+            volume: Qty::from_scaled(SCALE),
+            trades: 1,
+            value: Notional::ZERO,
+            open_time: Timestamp::from_nanos(0),
+            close_time: Timestamp::from_nanos(1),
+        }
+    }
+
+    fn deliver(s: &mut MovingAverageCrossover, event: &StrategyEvent<'_>) -> Vec<Intent> {
+        let mut intents = Vec::new();
+        let mut timers = Vec::new();
+        let mut ctx = Context::new(
+            s.id(),
+            ExchangeTime::from_nanos(1),
+            &mut intents,
+            &mut timers,
+        );
+        s.on_event(event, &mut ctx);
+        intents
+    }
+
+    fn feed_bar(s: &mut MovingAverageCrossover, close: i64) -> Vec<Intent> {
+        let b = bar(close);
+        deliver(
+            s,
+            &StrategyEvent::Bar {
+                subscription: SUB,
+                bar: &b,
+            },
+        )
+    }
+
+    fn warmed() -> MovingAverageCrossover {
+        let mut s = MovingAverageCrossover::new(
+            StrategyId::new(0),
+            INSTRUMENT,
+            SUB,
+            3,
+            Qty::from_scaled(10 * SCALE),
+        );
+        feed_bar(&mut s, 100);
+        feed_bar(&mut s, 100);
+        s
+    }
+
+    #[test]
+    fn a_refused_intent_releases_the_quantity_it_was_never_going_to_fill() {
+        let mut s = warmed();
+        let intents = feed_bar(&mut s, 130);
+        assert_eq!(intents.len(), 1);
+        assert_eq!(s.working(), Qty::from_scaled(10 * SCALE));
+
+        deliver(
+            &mut s,
+            &StrategyEvent::IntentRefused {
+                instrument: INSTRUMENT,
+                side: intents[0].side,
+                qty: intents[0].qty,
+                reason: RiskReason::StaleMarketData,
+            },
+        );
+        assert_eq!(
+            s.working(),
+            Qty::ZERO,
+            "nothing was created, so nothing is working"
+        );
+    }
+
+    #[test]
+    fn after_a_refusal_the_signal_is_acted_on_again() {
+        // The symptom the live session showed: without the refusal reaching the
+        // strategy, it believes its order is live and never re-orders.
+        let mut s = warmed();
+        let intents = feed_bar(&mut s, 130);
+        deliver(
+            &mut s,
+            &StrategyEvent::IntentRefused {
+                instrument: INSTRUMENT,
+                side: intents[0].side,
+                qty: intents[0].qty,
+                reason: RiskReason::StaleMarketData,
+            },
+        );
+
+        let again = feed_bar(&mut s, 140);
+        assert_eq!(again.len(), 1, "the signal is unchanged, so it asks again");
+        assert_eq!(again[0].qty, Qty::from_scaled(10 * SCALE));
+    }
+
+    #[test]
+    fn a_refusal_for_another_instrument_is_ignored() {
+        let mut s = warmed();
+        let intents = feed_bar(&mut s, 130);
+        deliver(
+            &mut s,
+            &StrategyEvent::IntentRefused {
+                instrument: InstrumentId::new(9),
+                side: intents[0].side,
+                qty: intents[0].qty,
+                reason: RiskReason::StaleMarketData,
+            },
+        );
+        assert_eq!(s.working(), Qty::from_scaled(10 * SCALE));
     }
 }
