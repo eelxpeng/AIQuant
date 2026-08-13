@@ -10,6 +10,7 @@ members = [
     "crates/simkit",
     "crates/report",
     "crates/adapters/sim",
+    "crates/adapters/historical",
     "bin/backtest",
 ]
 resolver = "3"
