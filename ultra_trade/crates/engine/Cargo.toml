@@ -14,5 +14,6 @@ oms = { path = "../oms" }
 strategy = { path = "../strategy" }
 
 [dev-dependencies]
+trybuild = "1"
 simkit = { path = "../simkit" }
 sim_venue = { path = "../adapters/sim" }

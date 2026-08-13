@@ -1,0 +1,5 @@
+error[E0599]: no variant named `FormingBar` found for enum `StrategyEvent<'_>`
+  --> tests/compile-fail/no_event_for_an_incomplete_bar.rs:14:28
+   |
+14 |     let _ = StrategyEvent::FormingBar {
+   |                            ^^^^^^^^^^ variant not found in `StrategyEvent<'_>`
