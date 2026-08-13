@@ -33,7 +33,7 @@ mod crossover;
 
 pub use crossover::MovingAverageCrossover;
 
-use event::{Intent, OrderKind, TimerToken};
+use event::{Intent, OrderKind, RiskReason, TimerToken};
 use marketdata::{Bar, BarSubscription, TopOfBook};
 use oms::OrderState;
 use types::{ExchangeTime, InstrumentId, Notional, OrderId, Px, Qty, Side, StrategyId};
@@ -87,6 +87,25 @@ pub enum StrategyEvent<'a> {
         qty: Qty,
         /// The fee charged.
         fee: Notional,
+    },
+    /// The risk gate refused an intent, so no order exists.
+    ///
+    /// Without this a strategy that tracks what it has in flight is wrong from
+    /// the first refusal onwards: no order was created, so no fill and no
+    /// [`OrderDone`] will ever arrive to release the quantity it thinks is
+    /// working. It then under-orders forever, and only a session where a limit
+    /// actually binds reveals it.
+    ///
+    /// [`OrderDone`]: StrategyEvent::OrderDone
+    IntentRefused {
+        /// What it wanted to trade.
+        instrument: InstrumentId,
+        /// Which way.
+        side: Side,
+        /// How much it asked for, before any rounding.
+        qty: Qty,
+        /// Which check refused it.
+        reason: RiskReason,
     },
     /// One of this strategy's orders reached a state it will not leave.
     ///

@@ -617,6 +617,23 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             qty: intent.qty,
             reason,
         }))?;
+        // Tell the strategy. A strategy that tracks what it has in flight is
+        // wrong from the first refusal onwards otherwise: no order exists, so
+        // no fill and no terminal transition will ever release the quantity.
+        //
+        // Anything it raises in response lands in the buffer this flush already
+        // took, so it is processed on the next event rather than re-entering
+        // here. That is deliberate: a strategy that re-orders on every refusal
+        // would otherwise loop inside one event.
+        self.dispatch_one(
+            intent.strategy,
+            &StrategyEvent::IntentRefused {
+                instrument: intent.instrument,
+                side: intent.side,
+                qty: intent.qty,
+                reason,
+            },
+        );
         Ok(())
     }
 
