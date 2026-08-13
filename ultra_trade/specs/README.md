@@ -81,4 +81,5 @@ review — that is how deferred work becomes forgotten work.
 
 <!-- Add one line per spec as it lands. -->
 
-_(none yet)_
+- [`006-value-types/`](006-value-types/) — fixed-point `Px`/`Qty`/`Notional` and
+  source-typed timestamps in `types` (#6)

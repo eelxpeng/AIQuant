@@ -142,3 +142,12 @@ visible before someone pays it by accident.
 **What would make us revisit**: trading crypto or any instrument priced below
 ~`1e-6`; a measured cache or latency problem attributable to value width; or a
 venue requiring more than nine decimal places.
+
+## Extended by
+
+[ADR #6](6-value-type-api-contracts.md) settles three API questions this record
+leaves unstated, without changing the table above: what the `Px × Qty` product
+does with a remainder finer than the scale (it names a rounding direction, so
+`Px * Qty` is not an operator), whether an elapsed-time span carries its clock
+kind (it does), and what "backing integers are private" forbids (raw arithmetic
+outside `types`, not the `from_scaled` / `to_scaled` pair).
