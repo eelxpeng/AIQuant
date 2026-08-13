@@ -193,22 +193,18 @@ Each of these should become an issue, then an ADR under `docs/adr/` or a spec
 decision record before the code that depends on it lands.
 
 - [x] ~~**Fixed-point representation**~~ — decided: `Px`/`Qty` are `i64` @ `1e-9`, `Notional` is `i128` @ `1e-9`, as three distinct newtypes. See [`adr/4-fixed-point-representation.md`](adr/4-fixed-point-representation.md) (#4). Phase 0 is unblocked.
-- [ ] **Runtime model**: single-threaded event loop with pinned core, vs. async, vs. thread-per-stage with SPSC queues. *Forced by: the first `engine` loop (D0.2 / Phase 1).*
-- [ ] **Event log durability**: in-memory ring + async persist, vs. synchronous append. Drives the crash-recovery contract. *Forced by: the event-log spec (D0.2).*
-- [ ] **Record format versioning**: every event log record must carry a format version from the first release, so a representation change is a supported migration rather than a break. *Forced by: the event-log spec (D0.2) — retrofitting after logs exist is the expensive order. Raised by ADR #4.*
-- [ ] **Order ID scheme and idempotency on reconnect**. *Forced by: the OMS spec (Phase 2, D2.1).*
+- [ ] **Runtime model**: single-threaded event loop with pinned core, vs. async, vs. thread-per-stage with SPSC queues. *Forced by: the first `engine` loop (D0.2 / Phase 1).* **Proposed answer in [`adr/1-core-engine-decisions.md`](adr/1-core-engine-decisions.md) (D-1): single-threaded and synchronous, no core pinning yet.**
+- [ ] **Event log durability**: in-memory ring + async persist, vs. synchronous append. Drives the crash-recovery contract. *Forced by: the event-log spec (D0.2).* **Still genuinely open — `MemoryLog` persists nothing, so there is no crash-recovery contract yet.**
+- [ ] **Record format versioning**: every event log record must carry a format version from the first release, so a representation change is a supported migration rather than a break. *Forced by: the event-log spec (D0.2) — retrofitting after logs exist is the expensive order. Raised by ADR #4.* **Proposed answer in ADR #1 (D-3), implemented: every record carries `FORMAT_VERSION`.**
+- [ ] **Order ID scheme and idempotency on reconnect**. *Forced by: the OMS spec (Phase 2, D2.1).* **Half answered by ADR #1 (D-6): the id scheme is decided and implemented, the reconnect idempotency is not addressed at all.**
 - [ ] **Position reconciliation policy**: how internal-vs-venue divergence halts trading, and how it resumes. *Forced by: the reconciliation spec (Phase 2, D2.4).*
 - [ ] **Which venue/feed adapter lands first**, and what its integration smoke proves. *Forced by: Phase 4, D4.1.*
 - [ ] **Latency budget targets** (p50/p99/p99.9) for tick-to-trade. *Forced by: Phase 4, D4.2 — deliberately late; a target picked before you can measure is a guess.*
-- [ ] **Reduce-only semantics**: exactly which gate checks a reduce-only order bypasses, and which still bind. *Forced by: the first risk-gate spec (Phase 2, D2.2).*
-- [ ] **Resume preconditions per halt reason**: resuming out of a reconciliation halt must be impossible until reconciled; "explicit and logged" is not sufficient. *Forced by: the halt/resume spec (Phase 2, D2.3).*
-- [ ] **Engine state machine**: which of the four commands is legal in which state, including the degenerate cells (flatten while halted, kill while flattening, resume while a flatten is in flight). *Forced by: the command-event spec (Phase 2). This is a states × operations matrix and the spec template already demands one.*
+- [ ] **Reduce-only semantics**: exactly which gate checks a reduce-only order bypasses, and which still bind. *Forced by: the first risk-gate spec (Phase 2, D2.2).* **Proposed answer in [`adr/1-core-engine-decisions.md`](adr/1-core-engine-decisions.md) (D-4), and implemented — this is the one most in need of a ruling.**
+- [ ] **Resume preconditions per halt reason**: resuming out of a reconciliation halt must be impossible until reconciled; "explicit and logged" is not sufficient. *Forced by: the halt/resume spec (Phase 2, D2.3).* **Proposed answer in ADR #1 (D-5), implemented for the reconciliation case only.**
+- [ ] **Engine state machine**: which of the four commands is legal in which state, including the degenerate cells (flatten while halted, kill while flattening, resume while a flatten is in flight). *Forced by: the command-event spec (Phase 2). This is a states × operations matrix and the spec template already demands one.* **Partly answered by ADR #1 (D-5): three states exist and are tested, but the full matrix is still unwritten.**
 - [ ] **Dropped command channel**: does the engine keep trading or halt when it loses the client? A dead-man switch is the conservative read of fail-closed and is also annoying on a network hiccup. *Forced by: the client transport spec (Phase 2).*
 - [ ] **Timer granularity and cost**: how fine timer events may be before log volume becomes the constraint. *Forced by: the first timer-using strategy.*
-- [ ] **Reduce-only semantics**: exactly which gate checks a reduce-only order bypasses, and which still bind. *Forced by: the first risk-gate spec (Phase 2, D2.2).*
-- [ ] **Resume preconditions per halt reason**: resuming out of a reconciliation halt must be impossible until reconciled; "explicit and logged" is not sufficient. *Forced by: the halt/resume spec (Phase 2, D2.3).*
-- [ ] **Engine state machine**: which of the four commands is legal in which state, including the degenerate cells (flatten while halted, kill while flattening, resume while a flatten is in flight). *Forced by: the command-event spec (Phase 2). This is a states × operations matrix and the spec template already demands one.*
-- [ ] **Dropped command channel**: does the engine keep trading or halt when it loses the client? A dead-man switch is the conservative read of fail-closed and is also annoying on a network hiccup. *Forced by: the client transport spec (Phase 2).*
 
 ## Non-goals for v1
 
