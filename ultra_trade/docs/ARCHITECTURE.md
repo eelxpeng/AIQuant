@@ -52,6 +52,7 @@ boundary, so the UI can neither observe nor influence anything replay cannot see
 | `report` | log consumer → metrics (PnL, drawdown) for finished sessions | engine internals |
 | `adapters/sim` | simulated venue + fill model — used by backtest AND tests | feeds, strategies |
 | `adapters/historical` | recorded market data replayed as a feed adapter | orders, strategies |
+| `adapters/live` | a live feed over a normalized line protocol, and the clock seam's one real implementation | venues, orders, strategies |
 | `adapters/<venue>` | one crate per real venue or feed | each other |
 | `bin/*` | thin binaries binding adapters: live, paper, backtest | domain logic of any kind |
 

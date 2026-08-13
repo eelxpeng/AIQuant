@@ -20,7 +20,10 @@
 //! the header makes that impossible rather than merely checked.
 //!
 //! Risk limits are *not* taken from the header. They are a policy this run
-//! chooses, not a property of the market that was recorded.
+//! chooses, not a property of the market that was recorded — so they are
+//! arguments, with defaults wide enough not to bind by accident. A default that
+//! silently refuses every order on an instrument priced in tens of thousands is
+//! worse than no default: it looks like the strategy did nothing.
 
 use engine::{Engine, EngineConfig, run};
 use event::{LogReader, Outbound};
@@ -58,9 +61,11 @@ fn decimal(scaled: i128) -> String {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: backtest <recorded.log>");
+    eprintln!("usage: backtest <recorded.log> [max-position] [max-order-notional]");
     eprintln!();
-    eprintln!("  recorded.log   a session written by `record`");
+    eprintln!("  recorded.log         a session written by `record` or `paper`");
+    eprintln!("  max-position         largest |position|, as a decimal (default 1000000)");
+    eprintln!("  max-order-notional   largest single order, as a decimal (default 1000000000)");
     eprintln!();
     eprintln!("produce one with:");
     eprintln!("  cargo run -p record -- session.log");
@@ -75,9 +80,15 @@ fn fail(context: &str, e: impl std::fmt::Display) -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(path) = args.first() else { usage() };
-    if args.len() > 1 {
+    if args.len() > 3 {
         usage();
     }
+    let max_position = Qty::from_decimal(args.get(1).map(String::as_str).unwrap_or("1000000"))
+        .unwrap_or_else(|e| fail("max-position", e));
+    let max_order_notional =
+        Px::from_decimal(args.get(2).map(String::as_str).unwrap_or("1000000000"))
+            .unwrap_or_else(|e| fail("max-order-notional", e));
+    let max_order_notional = Notional::from_scaled(max_order_notional.to_scaled() as i128);
 
     // The instruments come from the recording, so this run cannot disagree with
     // it about what `InstrumentId(0)` means.
@@ -106,12 +117,12 @@ fn main() {
             .set(
                 instrument.id(),
                 Limits {
-                    max_position: qty(50),
-                    max_exposure: money(100_000),
-                    max_order_notional: money(50_000),
-                    max_orders_in_window: 20,
-                    rate_window: ExchangeSpan::from_nanos(STEP_NANOS * 10),
-                    max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 5),
+                    max_position,
+                    max_exposure: money(1_000_000_000),
+                    max_order_notional,
+                    max_orders_in_window: 1_000,
+                    rate_window: ExchangeSpan::from_nanos(STEP_NANOS),
+                    max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 60),
                 },
             )
             .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
@@ -155,8 +166,8 @@ fn main() {
             StrategyId::new(0),
             first,
             subscription,
-            10,
-            qty(5),
+            20,
+            qty(1),
         )))
         .expect("strategy");
 
