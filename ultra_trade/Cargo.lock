@@ -136,6 +136,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "historical"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "event",
+ "marketdata",
+ "oms",
+ "risk",
+ "sim_venue",
+ "simkit",
+ "strategy",
+ "types",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
