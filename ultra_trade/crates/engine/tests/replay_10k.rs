@@ -20,6 +20,7 @@
 //! whose decisions must reproduce.
 
 use engine::{Engine, EngineConfig, FeedAdapter, run};
+use event::codec::{RECORD_LEN, decode_record, encode_record};
 use event::{
     Command, CommandEvent, Cursor, EngineState, Inbound, MarketEvent, MarketKind, MemoryLog,
     Outbound, PositionReport, Record, Seq,
@@ -418,4 +419,70 @@ fn a_ten_thousand_event_session_stays_within_its_reservations() {
         live.log().records().len()
     );
     assert!(!live.log().would_grow());
+}
+
+/// Encodes every record of a log, back to back.
+fn encode_all(records: &[Record]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(records.len() * RECORD_LEN);
+    let mut one = [0u8; RECORD_LEN];
+    for record in records {
+        encode_record(record, &mut one);
+        bytes.extend_from_slice(&one);
+    }
+    bytes
+}
+
+#[test]
+fn a_replayed_session_is_byte_identical_once_encoded() {
+    // D0.2 says "byte-identically", and until there was a codec the strongest
+    // available claim was field-by-field equality. Now the words can be taken
+    // literally: encode both logs and compare the bytes.
+    let live = run_live(build_fixture());
+    let live_records = live.log().records().to_vec();
+
+    let mut replayed = wire(ReplayVenue::new());
+    for record in &live_records {
+        if let Some(inbound) = record.event.as_inbound() {
+            replayed.on_inbound(*inbound).expect("replay");
+        }
+    }
+
+    let live_bytes = encode_all(&live_records);
+    let replay_bytes = encode_all(replayed.log().records());
+    assert_eq!(
+        live_bytes.len(),
+        replay_bytes.len(),
+        "the two logs are different sizes"
+    );
+    if live_bytes != replay_bytes {
+        // Name the first record that differs rather than dumping 850 KB.
+        let at = live_bytes
+            .iter()
+            .zip(&replay_bytes)
+            .position(|(a, b)| a != b)
+            .expect("lengths matched but contents did not");
+        panic!("logs diverge at byte {at}, in record {}", at / RECORD_LEN);
+    }
+}
+
+#[test]
+fn every_record_of_a_real_session_survives_the_codec() {
+    // The codec's own tests use hand-built and generated records. This runs it
+    // over 10,677 records that an actual session produced, which is a different
+    // and harder sample: real sequence numbers, real cascades, real reasons.
+    let live = run_live(build_fixture());
+    let records = live.log().records();
+    assert!(records.len() > EVENTS);
+
+    let mut one = [0u8; RECORD_LEN];
+    for record in records {
+        encode_record(record, &mut one);
+        let decoded = decode_record(&one)
+            .unwrap_or_else(|e| panic!("record {} failed to decode: {e}", record.seq));
+        assert_eq!(
+            &decoded, record,
+            "record {} changed in the round trip",
+            record.seq
+        );
+    }
 }

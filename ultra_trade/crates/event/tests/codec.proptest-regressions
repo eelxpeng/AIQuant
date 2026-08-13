@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b573caa6939d38452f9b8ea10bb694831372ebc25790c78c21f2296e249773ed # shrinks to seq = 0, event = In(Venue(VenueEvent { order: OrderId(0), venue_time: Timestamp<types::time::Exchange>(0), receive_time: Timestamp<types::time::Receive>(0), kind: Filled { px: Px(0), qty: Qty(0), fee: Notional(-9223372036854775809) } }))

@@ -92,9 +92,16 @@ jobs:
         run: cargo test --workspace --locked --offline
 
       # The end-to-end wiring, not just the units: a binary that stops running
-      # is a broken seam even when every crate's tests pass.
-      - name: Backtest smoke
-        run: cargo run -p backtest --locked --offline
+      # is a broken seam even when every crate's tests pass. Recording and then
+      # backtesting the recording exercises the whole chain — engine, codec,
+      # file, reader, historical feed — in the order a person would use it.
+      - name: Record and backtest smoke
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP:-/tmp}/smoke-session.log"
+          rm -f "$log"
+          cargo run -p record --locked --offline -- "$log" 500
+          cargo run -p backtest --locked --offline -- "$log"
 
   repeatability:
     name: allocation counter, 20 runs

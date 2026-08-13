@@ -14,6 +14,7 @@ version = "0.1.0"
 dependencies = [
  "engine",
  "event",
+ "historical",
  "marketdata",
  "report",
  "risk",
@@ -84,6 +85,7 @@ dependencies = [
 name = "event"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "types",
 ]
 
@@ -133,6 +135,21 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "historical"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "event",
+ "marketdata",
+ "oms",
+ "risk",
+ "sim_venue",
+ "simkit",
+ "strategy",
+ "types",
+]
 
 [[package]]
 name = "indexmap"
@@ -299,6 +316,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core",
+]
+
+[[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "event",
+ "marketdata",
+ "risk",
+ "sim_venue",
+ "strategy",
+ "types",
 ]
 
 [[package]]
