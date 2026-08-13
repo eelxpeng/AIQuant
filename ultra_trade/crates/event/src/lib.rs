@@ -14,12 +14,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod background;
 pub mod codec;
 mod file;
 mod inbound;
 mod log;
 mod outbound;
 
+pub use background::{BackgroundLog, LogSink, WriterReport};
 pub use file::{LogFileError, LogReader, LogWriter, Recovery, StopReason};
 pub use inbound::{
     Command, CommandEvent, Inbound, MarketEvent, MarketKind, PositionReport, RejectReason,
