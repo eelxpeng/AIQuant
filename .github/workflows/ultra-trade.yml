@@ -130,12 +130,17 @@ jobs:
       # the whole process, so its result depends on what else the test harness
       # is doing. AGENTS.md: a test whose result depends on timing or
       # concurrency is not proven by one green run — cite the streak.
-      - name: Repeat the zero-allocation proof
+      - name: Repeat the zero-allocation proofs
         run: |
+          set -euo pipefail
           cargo build --tests -p engine --locked --offline
           for run in $(seq 1 20); do
             echo "--- run $run/20 ---"
             cargo test -p engine --test no_alloc --locked --offline -- --exact \
               a_warmed_engine_does_not_allocate_while_processing_an_event
+            # The recorded variant runs a writer thread, so its counter sees
+            # two threads. Repetition matters more here, not less.
+            cargo test -p engine --test no_alloc_recorded --locked --offline -- --exact \
+              a_session_being_recorded_to_a_file_does_not_allocate_while_processing_an_event
           done
           echo "20/20 clean"
