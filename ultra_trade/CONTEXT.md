@@ -191,6 +191,22 @@ different clock. Every outbound decision names the sequence number of the
 inbound event that caused it.
 _Avoid_: Timestamp, order id, offset, index into a buffer
 
+**Recorded Session**:
+A finished session's event log, persisted. It is the only durable format, and
+it serves two purposes without changing shape: replayed whole it reproduces the
+session, and replayed inputs-only it is the market data a backtest runs on
+(ADR, recorded log format). Its header carries the instrument table it was
+recorded under, so it is interpretable on its own.
+_Avoid_: Market data file, tick data, capture, snapshot
+
+**Torn Tail**:
+A recorded session whose file ends mid-record, because the process died while
+writing. Detected from the file length and the last record's checksum. A reader
+truncates to the last intact record and reports what it dropped — never
+silently, because a short log is otherwise indistinguishable from a complete
+one.
+_Avoid_: Corruption, truncation as a general term, partial write
+
 **Record Format Version**:
 The format stamp every log record carries, from the first release. It exists so
 that changing the value representation later is a supported migration rather
