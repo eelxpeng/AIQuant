@@ -11,6 +11,7 @@ members = [
     "crates/report",
     "crates/adapters/sim",
     "crates/adapters/historical",
+    "bin/record",
     "bin/backtest",
 ]
 resolver = "3"

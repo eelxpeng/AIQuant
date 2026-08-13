@@ -1,5 +1,5 @@
 [package]
-name = "backtest"
+name = "record"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -13,5 +13,3 @@ risk = { path = "../../crates/risk" }
 strategy = { path = "../../crates/strategy" }
 engine = { path = "../../crates/engine" }
 sim_venue = { path = "../../crates/adapters/sim" }
-historical = { path = "../../crates/adapters/historical" }
-report = { path = "../../crates/report" }
