@@ -199,6 +199,27 @@ session, and replayed inputs-only it is the market data a backtest runs on
 recorded under, so it is interpretable on its own.
 _Avoid_: Market data file, tick data, capture, snapshot
 
+**Segment**:
+One file of a recorded session. A session is a chain of them, ordered by their
+session id and the sequence number of their first record. Recovery after a crash
+opens a new segment rather than repairing the damaged one, so the file a crash
+left behind is never written to again (ADR, crash-recovery contract).
+_Avoid_: Log file as a whole, rotation, shard, partition
+
+**Recovering**:
+The state a session is in between restarting and knowing its position: it has
+asked the venue for its open orders and positions and has not finished acting on
+the answer. It refuses to resume and refuses to flatten — flattening means
+driving the position to zero, and the position is not known yet. A kill still
+works, as it does from every state.
+_Avoid_: Starting, halted, reconnecting, warming up
+
+**Snapshot**:
+What a venue reports when asked what it currently holds — its open orders, then
+its positions, then a marker saying that is all of them. Requested rather than
+pushed, and recorded like any other input, so a recovery replays.
+_Avoid_: Position report on its own, book snapshot, market data snapshot
+
 **Torn Tail**:
 A recorded session whose file ends mid-record, because the process died while
 writing. Detected from the file length and the last record's checksum. A reader
