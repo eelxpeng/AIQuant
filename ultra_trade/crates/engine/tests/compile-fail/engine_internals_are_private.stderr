@@ -1,0 +1,5 @@
+error[E0616]: field `gate` of struct `Engine` is private
+  --> tests/compile-fail/engine_internals_are_private.rs:25:20
+   |
+25 |     let _ = engine.gate;
+   |                    ^^^^ private field

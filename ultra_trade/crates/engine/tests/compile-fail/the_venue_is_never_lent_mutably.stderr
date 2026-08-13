@@ -1,0 +1,5 @@
+error[E0596]: cannot borrow data in a `&` reference as mutable
+  --> tests/compile-fail/the_venue_is_never_lent_mutably.rs:29:5
+   |
+29 |     engine.venue().drain(&mut reports);
+   |     ^^^^^^^^^^^^^^ cannot borrow as mutable

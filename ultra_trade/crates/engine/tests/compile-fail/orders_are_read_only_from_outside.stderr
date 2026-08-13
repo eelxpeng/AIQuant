@@ -1,0 +1,7 @@
+error[E0596]: cannot borrow data in a `&` reference as mutable
+  --> tests/compile-fail/orders_are_read_only_from_outside.rs:25:13
+   |
+25 |       let _ = engine
+   |  _____________^
+26 | |         .orders()
+   | |_________________^ cannot borrow as mutable

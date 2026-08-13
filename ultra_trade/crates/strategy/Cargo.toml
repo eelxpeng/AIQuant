@@ -10,3 +10,6 @@ types = { path = "../types" }
 event = { path = "../event" }
 marketdata = { path = "../marketdata" }
 oms = { path = "../oms" }
+
+[dev-dependencies]
+trybuild = "1"

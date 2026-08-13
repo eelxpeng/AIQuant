@@ -60,6 +60,7 @@ dependencies = [
  "sim_venue",
  "simkit",
  "strategy",
+ "trybuild",
  "types",
 ]
 
@@ -427,6 +428,7 @@ dependencies = [
  "event",
  "marketdata",
  "oms",
+ "trybuild",
  "types",
 ]
 
