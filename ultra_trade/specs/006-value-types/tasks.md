@@ -213,8 +213,8 @@ argument true.
 - [X] T047 Confirm TEST-021 is green across the full operation surface: `cargo test -p types --test no_alloc`
 - [X] T048 Run the full gate from the repository root and capture the output verbatim: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`
 - [X] T049 Walk `specs/006-value-types/quickstart.md` end to end on a clean checkout and correct anything that does not match reality
-- [ ] T050 (not done — no PR opened in this session; the working tree is on `main`) Write the PR bodies citing spec `specs/006-value-types/`, the scenario IDs, the TEST IDs turned green, the task IDs completed, a "Design deltas" section versus issue #6, and an "Out of scope" list with tracking links (`specs/README.md`, Constitution gates)
-- [ ] T051 (not done — depends on T050) State explicitly in the PR body what was not run: no benchmarks and no latency budget (D4.2 → #1), no CI (D0.4 → #1), and whether any operation allocates (expected: none)
+- [X] T050 Write the PR bodies citing spec `specs/006-value-types/`, the scenario IDs, the TEST IDs turned green, the task IDs completed, a "Design deltas" section versus issue #6, and an "Out of scope" list with tracking links (`specs/README.md`, Constitution gates)
+- [X] T051 State explicitly in the PR body what was not run: no benchmarks and no latency budget (D4.2 → #1), no CI (D0.4 → #1), and whether any operation allocates (expected: none)
 
 ---
 
@@ -308,3 +308,13 @@ what everything above `types` is waiting for.
 - Every "confirm green" task names the exact command; its output belongs in the PR body (SC-001, SC-005).
 - No task adds `serde`, decimal parsing, division, a `Nearest` rounding mode, CI, or a benchmark. Each is a deferral in the spec with a tracking link.
 - `cargo fetch` is needed once for `proptest` and `trybuild`; after that the whole gate runs `--offline` (R-012).
+
+---
+
+## Landed
+
+PR [#7](https://github.com/eelxpeng/AIQuant/pull/7) — all three planned PRs merged as one
+branch (`feat/6-value-types`) with two commits: the spec and design docs, then
+the crate. The RED state is recorded in [red-evidence.md](red-evidence.md)
+rather than as its own commit, because the skeleton was never staged as one —
+an after-the-fact RED commit would be a commit the gate was never run against.
