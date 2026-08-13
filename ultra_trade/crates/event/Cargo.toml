@@ -7,3 +7,6 @@ publish.workspace = true
 
 [dependencies]
 types = { path = "../types" }
+
+[dev-dependencies]
+proptest = "1"
