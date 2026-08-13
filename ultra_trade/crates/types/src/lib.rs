@@ -12,6 +12,11 @@
 //!    Subtracting one from another does not build, and the [`Span`] a
 //!    subtraction produces carries the kind it came from.
 //!
+//! Alongside those it holds the identities and the [`Instrument`] every other
+//! crate keys its state by. They live here because the dependency order points
+//! one way: a type two crates share has to sit below both of them
+//! (Constitution I).
+//!
 //! The representation is fixed by ADR #4 (`docs/adr/4-fixed-point-representation.md`):
 //! [`Px`] and [`Qty`] are `i64` at a `1e-9` scale, [`Notional`] is `i128` at the
 //! same scale. The API contracts left open by that record — the rounding
@@ -28,11 +33,15 @@
 extern crate std;
 
 mod error;
+mod ids;
+mod instrument;
 mod money;
 mod rounding;
 mod time;
 
 pub use error::ValueError;
+pub use ids::{InstrumentId, OrderId, StrategyId};
+pub use instrument::{Instrument, Side};
 pub use money::{Notional, Px, Qty};
 pub use rounding::RoundDir;
 pub use time::{

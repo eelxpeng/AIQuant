@@ -58,6 +58,13 @@ bars are visible to a strategy — exposing an incomplete one as complete is
 look-ahead.
 _Avoid_: Current bar, forming bar, latest bar
 
+**Bar Subscription**:
+The name of one configured aggregation — an instrument plus a bar definition.
+A strategy subscribes by this and is delivered that aggregation's complete bars.
+Registered at session start, never during a run: changing the set mid-session
+would move bar boundaries that replay could not reproduce.
+_Avoid_: Bar spec, feed subscription, topic
+
 **Top Of Book**:
 The best bid and best ask with their sizes, at a stated event timestamp.
 _Avoid_: Depth, last trade, mid
@@ -101,6 +108,18 @@ rejected, or expired. Reconciliation may only move an order TO a terminal state,
 never out of one.
 _Avoid_: Inactive, done, closed
 
+**Working**:
+An order the venue could still execute. The complement of a terminal state, and
+the set a kill switch cancels.
+_Avoid_: Open, active, pending, live order as a synonym for unfilled
+
+**Lot**:
+One opening trade still on the books, carrying the quantity and price it opened
+at. A closing fill is matched against lots first-in-first-out, which is what
+makes realized profit exact without a division.
+_Avoid_: Lot size (a venue's quantity increment — a different thing entirely),
+position, fill
+
 ## Position And PnL
 
 **Position**:
@@ -112,6 +131,12 @@ _Avoid_: Exposure, venue position, inventory target
 The position as reported by the venue. Compared against `Position` during
 reconciliation; a divergence halts trading and is never silently resolved.
 _Avoid_: Position, exposure
+
+**Cash**:
+Signed money in and out of an instrument's books, fees included. Exact, derived
+from fills alone, and the number that makes mark-to-market a check on the lot
+bookkeeping rather than a restatement of it: `total = cash + position × mark`.
+_Avoid_: Balance, equity, buying power, realized PnL
 
 **Exposure**:
 A risk-side measure of economic size, computed from position and mark price
@@ -126,6 +151,35 @@ _Avoid_: Unrealized PnL, mark-to-market, gross PnL
 Profit and loss on open quantity, valued at the mark price at a stated
 timestamp. Always reported with the mark rule and timestamp that produced it.
 _Avoid_: Realized PnL, expected PnL
+
+## Events And The Log
+
+**Inbound Event**:
+Something that happens *to* the system: market data, a venue report, a venue
+position report, a timer firing, or an operator command. The complete set of
+session inputs — replay feeds exactly these back through a fresh engine, so
+anything that influenced an order and is not one of these makes replay a lie.
+_Avoid_: Message, tick, update, callback
+
+**Outbound Decision**:
+Something the system *decided*: an order submitted, a cancel submitted, an
+intent refused, a timer requested, or a state change. Replay must reproduce this
+sequence byte-for-byte from the inbound events alone.
+_Avoid_: Output, side effect, action, command
+
+**Sequence Number**:
+A record's position in the log. Monotonic, gap-free, and assigned by the log —
+never by a caller. It is the engine's only ordering key: not exchange time,
+which can tie or go backwards across venues, and not receive time, which is a
+different clock. Every outbound decision names the sequence number of the
+inbound event that caused it.
+_Avoid_: Timestamp, order id, offset, index into a buffer
+
+**Record Format Version**:
+The format stamp every log record carries, from the first release. It exists so
+that changing the value representation later is a supported migration rather
+than a break.
+_Avoid_: Schema version as a deployment concern, protocol version, API version
 
 ## Time And Clocks
 
