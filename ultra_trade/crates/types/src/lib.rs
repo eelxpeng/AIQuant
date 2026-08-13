@@ -32,6 +32,8 @@
 #[cfg(test)]
 extern crate std;
 
+mod clock;
+mod decimal;
 mod error;
 mod ids;
 mod instrument;
@@ -39,6 +41,8 @@ mod money;
 mod rounding;
 mod time;
 
+pub use clock::Clock;
+pub use decimal::{DecimalError, parse_scaled};
 pub use error::ValueError;
 pub use ids::{InstrumentId, OrderId, StrategyId};
 pub use instrument::{Instrument, Side};

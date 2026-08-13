@@ -180,6 +180,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "live_feed"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "event",
+ "marketdata",
+ "oms",
+ "risk",
+ "sim_venue",
+ "strategy",
+ "types",
+]
+
+[[package]]
 name = "marketdata"
 version = "0.1.0"
 dependencies = [
@@ -215,6 +229,20 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "paper"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "event",
+ "live_feed",
+ "marketdata",
+ "risk",
+ "sim_venue",
+ "strategy",
+ "types",
+]
 
 [[package]]
 name = "ppv-lite86"

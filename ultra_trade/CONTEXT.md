@@ -246,6 +246,15 @@ The local wall-clock instant at which the process observed an event. Valid for
 latency measurement, never for market-state logic.
 _Avoid_: Exchange time, monotonic time
 
+**Bridge**:
+The venue-specific half of a live feed, living outside this repository: it
+connects to an exchange and prints normalized events in the feed's line
+protocol. Keeping it outside is what stops a TLS and WebSocket stack from
+arriving as a side effect of wanting market data, and what lets one feed
+adapter serve every venue.
+_Avoid_: Feed adapter (that is the part inside), gateway, connector as a
+synonym for the venue adapter
+
 **Monotonic Time**:
 The injected local monotonic clock, used for elapsed-time and timeout logic.
 Never compared to exchange or receive time.

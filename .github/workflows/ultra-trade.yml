@@ -103,6 +103,20 @@ jobs:
           cargo run -p record --locked --offline -- "$log" 500
           cargo run -p backtest --locked --offline -- "$log"
 
+          # And the paper path: a bridge-shaped feed, a live clock, a recording,
+          # then a backtest over what paper produced.
+          md="${RUNNER_TEMP:-/tmp}/smoke-market.txt"
+          paper_log="${RUNNER_TEMP:-/tmp}/smoke-paper.log"
+          rm -f "$md" "$paper_log"
+          for i in $(seq 1 200); do
+            t=$((1700000000000000000 + i * 100000000))
+            p=$((100 + i % 20))
+            echo "Q SMOKE $t $p.00 5 $((p + 1)).00 5"
+            echo "T SMOKE $((t + 50000000)) $p.50 1 B"
+          done > "$md"
+          cargo run -p paper --locked --offline -- SMOKE "$md" "$paper_log" 0.01 0.01 < /dev/null
+          cargo run -p backtest --locked --offline -- "$paper_log"
+
   repeatability:
     name: allocation counter, 20 runs
     runs-on: ubuntu-latest
