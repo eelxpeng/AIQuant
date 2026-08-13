@@ -15,10 +15,12 @@
 #![deny(missing_docs)]
 
 pub mod codec;
+mod file;
 mod inbound;
 mod log;
 mod outbound;
 
+pub use file::{LogFileError, LogReader, LogWriter, Recovery, StopReason};
 pub use inbound::{
     Command, CommandEvent, Inbound, MarketEvent, MarketKind, PositionReport, RejectReason,
     TimerEvent, TimerToken, VenueEvent, VenueKind,
