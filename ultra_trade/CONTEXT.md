@@ -161,6 +161,22 @@ session inputs — replay feeds exactly these back through a fresh engine, so
 anything that influenced an order and is not one of these makes replay a lie.
 _Avoid_: Message, tick, update, callback
 
+**Out-Of-Order Update**:
+A market event stamped earlier than one already folded into the book for that
+instrument and event kind. It is refused and counted, never applied — letting it
+through would move the book backwards and price risk against a market that has
+already moved on. An event stamped at the *same* instant is not out of order and
+is applied, because venues stamp more coarsely than a nanosecond.
+_Avoid_: Stale market data (that is about age, not arrival order), duplicate,
+gap, late fill
+
+**Stale Market Data**:
+Top of book that is older than its configured bound, measured on the exchange
+clock. A property of **age**, evaluated at the risk gate, and unrelated to the
+order events arrived in: a book can be perfectly ordered and hours old, or
+current and reordered.
+_Avoid_: Out-of-order update, disconnect, empty book
+
 **Outbound Decision**:
 Something the system *decided*: an order submitted, a cancel submitted, an
 intent refused, a timer requested, or a state change. Replay must reproduce this

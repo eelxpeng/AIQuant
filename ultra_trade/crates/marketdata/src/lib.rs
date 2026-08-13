@@ -23,7 +23,7 @@ mod bar;
 mod book;
 
 pub use bar::{AggregateError, Aggregator, Aggregators, Bar, BarSpec, BarSubscription};
-pub use book::{Books, LastTrade, MarkRule, TopOfBook};
+pub use book::{Applied, Books, LastTrade, MarkRule, TopOfBook};
 
 use types::RoundDir;
 
