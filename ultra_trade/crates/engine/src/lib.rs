@@ -34,7 +34,9 @@ use event::{
     Command, CommandEvent, EngineState, Event, EventLog, Inbound, Intent, LogError, MarketEvent,
     MarketKind, Outbound, PositionReport, RiskReason, Seq, StateReason, TimerEvent, VenueKind,
 };
-use marketdata::{AggregateError, Aggregator, Aggregators, Bar, BarSubscription, Books, MarkRule};
+use marketdata::{
+    AggregateError, Aggregator, Aggregators, Applied, Bar, BarSubscription, Books, MarkRule,
+};
 use oms::{OmsError, Order, Orders, PositionError, Positions, ReconState, VenueAdapter};
 use risk::{Decision, GateInput, RiskGate};
 use std::collections::VecDeque;
@@ -297,8 +299,17 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
     }
 
     fn on_market(&mut self, m: MarketEvent) -> Result<(), EngineError> {
-        if !self.books.apply(&m) {
-            return Err(EngineError::UnknownInstrument);
+        match self.books.apply(&m) {
+            Applied::Accepted => {}
+            Applied::UnknownInstrument => return Err(EngineError::UnknownInstrument),
+            Applied::OutOfOrder { .. } => {
+                // The book refused it, so nothing downstream may see it either.
+                // Letting it reach the venue would leave a simulated venue's
+                // book ahead of the engine's; letting it reach the aggregators
+                // would put a bar out of order. `Books` counts the refusal, and
+                // the count is reachable through `books()`.
+                return Ok(());
+            }
         }
         // Unconditional: a simulated venue needs the book to fill against, and
         // a real one ignores it. No branch here asks which is bound.

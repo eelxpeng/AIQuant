@@ -436,6 +436,99 @@ fn an_order_larger_than_the_touch_fills_what_is_there_and_cancels_the_rest() {
     assert_eq!(engine.positions().get(I).expect("position").qty(), qty(5));
 }
 
+/// Counts what it is shown, so a test can assert what never arrived.
+#[derive(Debug, Default)]
+struct Counting {
+    quotes: usize,
+    trades: usize,
+    bars: usize,
+}
+
+impl Strategy for Counting {
+    fn id(&self) -> StrategyId {
+        StrategyId::new(0)
+    }
+
+    fn on_event(&mut self, event: &StrategyEvent<'_>, _ctx: &mut Context<'_>) {
+        match event {
+            StrategyEvent::Quote { .. } => self.quotes += 1,
+            StrategyEvent::Trade { .. } => self.trades += 1,
+            StrategyEvent::Bar { .. } => self.bars += 1,
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_market_event_that_arrives_late_reaches_nothing_downstream() {
+    let mut engine = Engine::new(config(), sim(), MemoryLog::with_capacity(64));
+    let _ =
+        engine.add_aggregator(Aggregator::new(I, BarSpec::Tick { threshold: 1 }).expect("spec"));
+    engine
+        .add_strategy(Box::new(Counting::default()))
+        .expect("strategy");
+
+    let mut feed = Script::new(I)
+        .quote(1_000, 99, 100, 101, 100)
+        .trade(1_100, 100, 1, Side::Buy)
+        // Both of these are stamped before what the book already holds.
+        .quote(500, 1, 100, 2, 100)
+        .trade(600, 55, 1, Side::Buy)
+        .build();
+    run(&mut feed, &mut engine).expect("session");
+
+    // The book kept the newer prices and counted the two refusals.
+    let top = engine.books().top(I).expect("quote");
+    assert_eq!(top.bid_px, px(99));
+    assert_eq!(top.ask_px, px(101));
+    assert_eq!(engine.books().total_out_of_order(), 2);
+    assert_eq!(engine.books().last_trade(I).expect("trade").px, px(100));
+}
+
+#[test]
+fn a_late_market_event_is_still_recorded_as_an_input() {
+    // It is refused, not erased. Replay must see the same inputs this run saw,
+    // including the ones it decided to ignore.
+    let mut engine = Engine::new(config(), sim(), MemoryLog::with_capacity(64));
+    let mut feed = Script::new(I)
+        .quote(1_000, 99, 100, 101, 100)
+        .quote(500, 1, 100, 2, 100)
+        .build();
+    run(&mut feed, &mut engine).expect("session");
+
+    assert_eq!(engine.log().inbound().count(), 2);
+    assert_eq!(engine.books().total_out_of_order(), 1);
+}
+
+#[test]
+fn refusing_a_late_event_is_reproduced_on_replay() {
+    let mut live = Engine::new(config(), sim(), MemoryLog::with_capacity(128));
+    let _ = live.add_aggregator(Aggregator::new(I, BarSpec::Tick { threshold: 1 }).expect("spec"));
+    live.add_strategy(crossover()).expect("strategy");
+    let mut feed = Script::new(I)
+        .quote(1_000, 99, 100, 101, 100)
+        .trade(2_000, 100, 1, Side::Buy)
+        .trade(1_500, 999, 1, Side::Buy)
+        .trade(3_000, 100, 1, Side::Buy)
+        .trade(4_000, 130, 1, Side::Buy)
+        .build();
+    run(&mut feed, &mut live).expect("session");
+    assert_eq!(live.books().total_out_of_order(), 1);
+
+    // The refusal is a function of records already in the log, which is why it
+    // needs no record of its own: replay reaches the same decision unaided.
+    let mut replayed = Engine::new(config(), ReplayVenue::new(), MemoryLog::with_capacity(128));
+    let _ =
+        replayed.add_aggregator(Aggregator::new(I, BarSpec::Tick { threshold: 1 }).expect("spec"));
+    replayed.add_strategy(crossover()).expect("strategy");
+    for input in inputs(live.log()) {
+        replayed.on_inbound(input).expect("replay");
+    }
+
+    assert_eq!(replayed.log().records(), live.log().records());
+    assert_eq!(replayed.books().total_out_of_order(), 1);
+}
+
 #[test]
 fn an_event_for_an_unconfigured_instrument_is_refused() {
     let mut engine = Engine::new(config(), sim(), MemoryLog::with_capacity(16));

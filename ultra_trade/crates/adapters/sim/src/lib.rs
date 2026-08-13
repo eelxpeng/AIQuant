@@ -18,7 +18,7 @@
 #![deny(missing_docs)]
 
 use event::{Inbound, MarketEvent, MarketKind, OrderKind, RejectReason, VenueEvent, VenueKind};
-use marketdata::{Books, TopOfBook};
+use marketdata::{Applied, Books, TopOfBook};
 use oms::{Order, VenueAdapter, VenueError};
 use types::{
     ExchangeSpan, ExchangeTime, InstrumentId, Notional, OrderId, Px, Qty, ReceiveTime, RoundDir,
@@ -131,8 +131,16 @@ impl SimVenue {
     /// is what keeps the two views identical without either reaching into the
     /// other.
     fn observe(&mut self, market: &MarketEvent) {
+        // Refuse whatever the engine's book would refuse, on the same rule.
+        // The engine already filters these out before calling, so this is a
+        // second line of defence rather than the only one — but a venue filling
+        // against a book the engine had rejected would diverge from it
+        // silently, and that divergence would show up as a fill nobody can
+        // explain.
+        if self.books.apply(market) != Applied::Accepted {
+            return;
+        }
         self.now = market.exchange_time;
-        self.books.apply(market);
 
         if let MarketKind::Trade { px, qty, .. } = market.kind {
             self.fill_resting(market.instrument, px, qty);
