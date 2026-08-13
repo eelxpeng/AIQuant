@@ -1,0 +1,6 @@
+# Pinned so `cargo fmt --check` and `cargo clippy -D warnings` give the same
+# verdict on every machine. The gate blocks merge, so its verdict cannot depend
+# on whose toolchain ran it (specs/006-value-types/research.md R-001).
+[toolchain]
+channel = "1.93.0"
+components = ["rustfmt", "clippy"]

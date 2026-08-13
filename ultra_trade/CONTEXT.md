@@ -34,6 +34,18 @@ Wider than `Px` and `Qty` because cumulative traded value overflows 64 bits on a
 ordinary day. The only type produced by multiplying the other two.
 _Avoid_: Px, exposure, position value at an unstated mark
 
+**Scale Unit**:
+The `1e-9` step that every `Px`, `Qty`, and `Notional` is an exact integer
+multiple of (ADR #4). It is a property of the representation, shared by all three
+types and identical for every instrument — not something a venue sets.
+_Avoid_: Tick size, lot size, backing integer, precision
+
+**Rounding Direction**:
+The direction a value is moved when it is rounded to a tick or lot at a venue
+boundary — up, down, toward zero, or away from zero. Always named at the call
+site; there is no default, and a call that does not state one does not compile.
+_Avoid_: Precision, tolerance, epsilon, rounding mode as a global setting
+
 **Bar**:
 An aggregate over trades or quotes under a stated convention — time, volume,
 dollar, tick-imbalance. A convention, never a market fact. Built by
@@ -131,6 +143,14 @@ _Avoid_: Exchange time, monotonic time
 The injected local monotonic clock, used for elapsed-time and timeout logic.
 Never compared to exchange or receive time.
 _Avoid_: Wall clock, exchange time
+
+**Span**:
+The elapsed nanoseconds between two timestamps of **one** clock kind, carrying
+that kind (ADR #6). Produced only by subtracting two timestamps of the same kind,
+and applicable only to timestamps of that kind — a receive-derived span cannot
+touch an exchange timestamp. A configured threshold or budget names its kind at
+the call site.
+_Avoid_: Timestamp, timeout, latency as an untyped number
 
 **Current Event Time**:
 The exchange timestamp of the event a component is processing right now. This is

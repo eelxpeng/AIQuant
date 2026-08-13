@@ -1,0 +1,31 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+  --> tests/compile-fail/round_without_direction.rs:14:16
+   |
+14 |     let _ = px.round_to_tick(tick);
+   |                ^^^^^^^^^^^^^------ argument #2 of type `RoundDir` is missing
+   |
+note: method defined here
+  --> src/money.rs
+   |
+   |     pub fn round_to_tick(self, tick: Px, dir: RoundDir) -> Result<Px, ValueError> {
+   |            ^^^^^^^^^^^^^
+help: provide the argument
+   |
+14 |     let _ = px.round_to_tick(tick, /* RoundDir */);
+   |                                  ++++++++++++++++
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+  --> tests/compile-fail/round_without_direction.rs:15:17
+   |
+15 |     let _ = qty.round_to_lot(lot);
+   |                 ^^^^^^^^^^^^----- argument #2 of type `RoundDir` is missing
+   |
+note: method defined here
+  --> src/money.rs
+   |
+   |     pub fn round_to_lot(self, lot: Qty, dir: RoundDir) -> Result<Qty, ValueError> {
+   |            ^^^^^^^^^^^^
+help: provide the argument
+   |
+15 |     let _ = qty.round_to_lot(lot, /* RoundDir */);
+   |                                 ++++++++++++++++

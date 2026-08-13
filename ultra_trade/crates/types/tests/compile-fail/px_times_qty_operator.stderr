@@ -1,0 +1,27 @@
+error[E0369]: cannot multiply `Px` by `Qty`
+  --> tests/compile-fail/px_times_qty_operator.rs:12:16
+   |
+12 |     let _ = px * qty;
+   |             -- ^ --- Qty
+   |             |
+   |             Px
+   |
+note: `Px` does not implement `Mul<Qty>`
+  --> src/money.rs
+   |
+   | pub struct Px(i64);
+   | ^^^^^^^^^^^^^ `Px` is defined in another crate
+
+error[E0369]: cannot multiply `Qty` by `Px`
+  --> tests/compile-fail/px_times_qty_operator.rs:13:17
+   |
+13 |     let _ = qty * px;
+   |             --- ^ -- Px
+   |             |
+   |             Qty
+   |
+note: `Qty` does not implement `Mul<Px>`
+  --> src/money.rs
+   |
+   | pub struct Qty(i64);
+   | ^^^^^^^^^^^^^^ `Qty` is defined in another crate

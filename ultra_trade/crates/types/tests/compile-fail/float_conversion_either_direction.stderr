@@ -1,0 +1,63 @@
+error[E0308]: mismatched types
+  --> tests/compile-fail/float_conversion_either_direction.rs:11:22
+   |
+11 |     let _ = Px::from(123.45_f64);
+   |             -------- ^^^^^^^^^^ expected `Px`, found `f64`
+   |             |
+   |             arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> $RUST/core/src/convert/mod.rs
+
+error[E0308]: mismatched types
+  --> tests/compile-fail/float_conversion_either_direction.rs:12:23
+   |
+12 |     let _ = Qty::from(1.5_f32);
+   |             --------- ^^^^^^^ expected `Qty`, found `f32`
+   |             |
+   |             arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> $RUST/core/src/convert/mod.rs
+
+error[E0277]: the trait bound `f64: From<Px>` is not satisfied
+  --> tests/compile-fail/float_conversion_either_direction.rs:13:21
+   |
+13 |     let _: f64 = px.into();
+   |                     ^^^^ the trait `From<Px>` is not implemented for `f64`
+   |
+   = help: the following other types implement trait `From<T>`:
+             `f64` implements `From<bool>`
+             `f64` implements `From<f16>`
+             `f64` implements `From<f32>`
+             `f64` implements `From<i16>`
+             `f64` implements `From<i32>`
+             `f64` implements `From<i8>`
+             `f64` implements `From<u16>`
+             `f64` implements `From<u32>`
+             `f64` implements `From<u8>`
+   = note: required for `Px` to implement `Into<f64>`
+
+error[E0277]: the trait bound `f64: From<Notional>` is not satisfied
+  --> tests/compile-fail/float_conversion_either_direction.rs:15:43
+   |
+15 |     let _: f64 = Notional::from_scaled(1).into();
+   |                                           ^^^^ the trait `From<Notional>` is not implemented for `f64`
+   |
+   = help: the following other types implement trait `From<T>`:
+             `f64` implements `From<bool>`
+             `f64` implements `From<f16>`
+             `f64` implements `From<f32>`
+             `f64` implements `From<i16>`
+             `f64` implements `From<i32>`
+             `f64` implements `From<i8>`
+             `f64` implements `From<u16>`
+             `f64` implements `From<u32>`
+             `f64` implements `From<u8>`
+   = note: required for `Notional` to implement `Into<f64>`
+
+error[E0605]: non-primitive cast: `Px` as `f64`
+  --> tests/compile-fail/float_conversion_either_direction.rs:14:13
+   |
+14 |     let _ = px as f64;
+   |             ^^^^^^^^^ an `as` expression can only be used to convert between primitive types or to coerce to a specific trait object

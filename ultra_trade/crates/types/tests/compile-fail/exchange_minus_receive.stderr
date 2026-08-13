@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+  --> tests/compile-fail/exchange_minus_receive.rs:13:24
+   |
+13 |     let _ = exchange - receive;
+   |                        ^^^^^^^ expected `Timestamp<Exchange>`, found `Timestamp<Receive>`
+   |
+   = note: expected struct `Timestamp<Exchange>`
+              found struct `Timestamp<Receive>`
+
+error[E0308]: mismatched types
+  --> tests/compile-fail/exchange_minus_receive.rs:14:23
+   |
+14 |     let _ = receive - exchange;
+   |                       ^^^^^^^^ expected `Timestamp<Receive>`, found `Timestamp<Exchange>`
+   |
+   = note: expected struct `Timestamp<Receive>`
+              found struct `Timestamp<Exchange>`
