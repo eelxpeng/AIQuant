@@ -35,11 +35,18 @@ graph LR
 | `paper` | **live** | simulated | trade a real market with no money at risk |
 | *`live`* | live | **real** | not built — it is `paper` with the venue swapped |
 
+All three take the same **session config** — what to trade, under what limits,
+with which strategies (`examples/kraken.conf`):
+
 ```bash
-cargo run -p record   -- session.log 2000          # make a recording
-cargo run -p backtest -- session.log               # run a strategy over it
-cargo run -p paper    -- XBTUSD /tmp/md live.log 0.1 0.00000001
+cargo run -p record   -- examples/kraken.conf session.log 2000
+cargo run -p backtest -- session.log examples/kraken.conf
+cargo run -p paper    -- examples/kraken.conf /tmp/md live.log
 ```
+
+Give `backtest` the config a recording was made under and it reproduces the
+session; give it a different one to ask what another policy would have done over
+the same market.
 
 ---
 
@@ -155,7 +162,15 @@ graph TD
     eng --> live["adapters/live"]
     oms --> sim["adapters/sim"]
     oms --> rep["report"]
+
+    risk --> cfg["<b>config</b><br/>the session file"]
+    md --> cfg
+    cfg -.->|"read at startup only"| BINS["the three binaries"]
 ```
+
+`config` points *into* the binaries, not into the engine. The engine is handed
+instruments and limits as values; it has never read a file and cannot tell that
+one exists. That is what keeps a test able to build a session in three lines.
 
 | Crate | Owns | Notably does **not** know about |
 |---|---|---|
@@ -170,9 +185,10 @@ graph TD
 | `adapters/historical` | a recording, replayed as a feed | orders |
 | `adapters/live` | live feed, line protocol, **the one real clock** | venues, orders |
 | `report` | log → PnL, drawdown, refusals | engine internals |
+| `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**19,600 lines, 358 tests, zero third-party dependencies** in the trading path.
+**20,300 lines, 380 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -250,4 +266,4 @@ So the map is not mistaken for the territory:
 | `client` | operator commands come from stdin; there is no separate UI process |
 | Latency budget | never measured. The feed is ~6s behind the market, so it cannot be measured with this bridge. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |
-| Config files | instruments and risk limits are command-line arguments and constants in the binaries |
+| Per-strategy config beyond the crossover | one strategy kind exists, so `strategy crossover` is the only form the config accepts |

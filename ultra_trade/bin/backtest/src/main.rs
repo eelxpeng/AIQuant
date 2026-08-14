@@ -1,7 +1,7 @@
 //! Backtests a strategy over a recorded session.
 //!
 //! ```text
-//! backtest <recorded.log>
+//! backtest <recorded.log> [session.conf]
 //! ```
 //!
 //! A thin binary. It binds a feed, a venue, and a strategy, and calls the
@@ -19,12 +19,14 @@
 //! `InstrumentId(0)` would silently mean a different contract. Taking them from
 //! the header makes that impossible rather than merely checked.
 //!
-//! Risk limits are *not* taken from the header. They are a policy this run
-//! chooses, not a property of the market that was recorded — so they are
-//! arguments, with defaults wide enough not to bind by accident. A default that
-//! silently refuses every order on an instrument priced in tens of thousands is
-//! worse than no default: it looks like the strategy did nothing.
+//! Risk limits and strategies are *not* taken from the header. They are what
+//! this run chooses, not a property of the market that was recorded, so they
+//! come from a config — the same config a paper session would use. Given one,
+//! a backtest over a paper recording reproduces it; given none, it falls back
+//! to limits wide enough not to bind by accident and one crossover on the first
+//! instrument.
 
+use config::{SessionConfig, StrategyConfig};
 use engine::{Engine, EngineConfig, run};
 use event::{LogReader, Outbound};
 use historical::{HistoricalFeed, Replaying};
@@ -61,16 +63,14 @@ fn decimal(scaled: i128) -> String {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: backtest <recorded.log> [max-position] [max-order-notional]");
+    eprintln!("usage: backtest <recorded.log> [session.conf]");
     eprintln!();
-    eprintln!("  recorded.log         a session written by `record` or `paper`");
-    eprintln!("  max-position         largest |position|, as a decimal (default 1000)");
-    eprintln!("  max-order-notional   largest single order, as a decimal (default 1000000)");
+    eprintln!("  recorded.log   a session written by `record` or `paper`");
+    eprintln!("  session.conf   limits and strategies for this run; without it,");
+    eprintln!("                 wide limits and one crossover on the first instrument");
     eprintln!();
-    eprintln!("defaults match `paper`, so backtesting a paper recording reproduces it.");
-    eprintln!();
-    eprintln!("produce one with:");
-    eprintln!("  cargo run -p record -- session.log");
+    eprintln!("give the config the recording was made under and the backtest");
+    eprintln!("reproduces it; give a different one to ask what would have happened.");
     std::process::exit(2);
 }
 
@@ -82,15 +82,9 @@ fn fail(context: &str, e: impl std::fmt::Display) -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(path) = args.first() else { usage() };
-    if args.len() > 3 {
+    if args.len() > 2 {
         usage();
     }
-    let max_position = Qty::from_decimal(args.get(1).map(String::as_str).unwrap_or("1000"))
-        .unwrap_or_else(|e| fail("max-position", e));
-    let max_order_notional =
-        Px::from_decimal(args.get(2).map(String::as_str).unwrap_or("1000000000"))
-            .unwrap_or_else(|e| fail("max-order-notional", e));
-    let max_order_notional = Notional::from_scaled(max_order_notional.to_scaled() as i128);
 
     // The instruments come from the recording, so this run cannot disagree with
     // it about what `InstrumentId(0)` means.
@@ -112,27 +106,54 @@ fn main() {
     }
     drop(reader);
 
-    // Limits are this run's policy, not the recording's.
-    let mut limits = LimitBook::with_instruments(instruments.len());
-    for instrument in &instruments {
-        limits
-            .set(
-                instrument.id(),
-                // These match `paper`'s defaults exactly, so backtesting a
-                // paper recording reproduces it rather than diverging on a
-                // policy difference nobody chose. Override the two that most
-                // often need it from the command line.
-                Limits {
-                    max_position,
-                    max_exposure: money(10_000_000),
-                    max_order_notional,
-                    max_orders_in_window: 60,
-                    rate_window: ExchangeSpan::from_nanos(STEP_NANOS * 60),
-                    max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 30),
-                },
+    // Limits and strategies are this run's policy.
+    let session = args.get(1).map(|conf| {
+        SessionConfig::load(conf).unwrap_or_else(|e| fail(&format!("cannot read {conf}"), e))
+    });
+    let (limits, strategies) = match &session {
+        Some(session) => {
+            if session.instruments.len() != instruments.len() {
+                fail(
+                    "the config and the recording disagree",
+                    format!(
+                        "the recording holds {} instruments, the config declares {}",
+                        instruments.len(),
+                        session.instruments.len()
+                    ),
+                );
+            }
+            (session.limits.clone(), session.strategies.clone())
+        }
+        None => {
+            let mut limits = LimitBook::with_instruments(instruments.len());
+            for instrument in &instruments {
+                limits
+                    .set(
+                        instrument.id(),
+                        Limits {
+                            max_position: qty(1_000),
+                            max_exposure: money(10_000_000),
+                            max_order_notional: money(1_000_000),
+                            max_orders_in_window: 60,
+                            rate_window: ExchangeSpan::from_nanos(STEP_NANOS * 60),
+                            max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 30),
+                        },
+                    )
+                    .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
+            }
+            let first = &header.instruments[0];
+            (
+                limits,
+                vec![StrategyConfig {
+                    instrument: first.id,
+                    symbol: first.symbol_str().unwrap_or("?").to_string(),
+                    window: 20,
+                    size: qty(1),
+                    bars: BarSpec::Tick { threshold: 1 },
+                }],
             )
-            .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
-    }
+        }
+    };
 
     // The two bindings that make this a backtest.
     let mut feed = match HistoricalFeed::open(path, &instruments, Replaying::MarketDataOnly) {
@@ -151,8 +172,7 @@ fn main() {
 
     let recorded_by_the_session = feed.recorded_decisions().to_vec();
     let recorded_decisions = recorded_by_the_session.len();
-    let recorded_orders = feed
-        .recorded_decisions()
+    let recorded_orders = recorded_by_the_session
         .iter()
         .filter(|o| matches!(o, Outbound::OrderSubmitted { .. }))
         .count();
@@ -165,18 +185,19 @@ fn main() {
         header.session_start,
     );
     let mut engine = Engine::new(config, venue, event::MemoryLog::with_capacity(1 << 16));
-    let first = instruments[0].id();
-    let subscription = engine
-        .add_aggregator(Aggregator::new(first, BarSpec::Tick { threshold: 1 }).expect("spec"));
-    engine
-        .add_strategy(Box::new(MovingAverageCrossover::new(
-            StrategyId::new(0),
-            first,
-            subscription,
-            20,
-            qty(1),
-        )))
-        .expect("strategy");
+    for (index, spec) in strategies.iter().enumerate() {
+        let subscription =
+            engine.add_aggregator(Aggregator::new(spec.instrument, spec.bars).expect("validated"));
+        engine
+            .add_strategy(Box::new(MovingAverageCrossover::new(
+                StrategyId::new(index as u16),
+                spec.instrument,
+                subscription,
+                spec.window,
+                spec.size,
+            )))
+            .unwrap_or_else(|e| fail("strategy", format!("{e:?}")));
+    }
 
     if let Err(e) = run(&mut feed, &mut engine) {
         eprintln!("backtest: session stopped: {e:?}");
@@ -216,15 +237,13 @@ fn main() {
         decimal(summary.max_drawdown.to_scaled())
     );
     println!("  final state        {:?}", summary.final_state);
-    for instrument in &instruments {
-        let position = engine
-            .positions()
-            .get(instrument.id())
-            .expect("configured instrument");
+    for entry in &header.instruments {
+        let position = engine.positions().get(entry.id).expect("configured");
         println!(
-            "  final position     {} ({})",
-            decimal(position.qty().to_scaled() as i128),
-            instrument.id()
+            "  {:<14}     realized {}  position {}",
+            entry.symbol_str().unwrap_or("?"),
+            decimal(position.realized().to_scaled()),
+            decimal(position.qty().to_scaled() as i128)
         );
     }
 
