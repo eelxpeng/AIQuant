@@ -75,10 +75,13 @@ def seconds_to_nanos(text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pair", help="Kraken pair, e.g. XBTUSD")
+    parser.add_argument("pair", nargs="+", help="Kraken pairs, e.g. XBTUSD ETHUSD")
     parser.add_argument(
         "--symbol",
-        help="what to call it in the feed (defaults to the pair)",
+        action="append",
+        default=[],
+        help="what to call each pair in the feed, in the same order "
+        "(defaults to the pair name)",
     )
     parser.add_argument(
         "--interval",
@@ -94,71 +97,78 @@ def main():
         help="stop after this long; 0 runs until killed",
     )
     args = parser.parse_args()
-    symbol = args.symbol or args.pair
+    pairs = args.pair
+    names = args.symbol + pairs[len(args.symbol):]
+    if len(names) != len(pairs):
+        parser.error("give either no --symbol or one per pair")
 
     started = time.monotonic()
-    since = None
-    last_quote = None
+    # Per pair, so one slow or quiet instrument cannot stall another.
+    since = {p: None for p in pairs}
+    last_quote = {p: None for p in pairs}
     consecutive_failures = 0
     quotes = trades = 0
 
-    print(f"# kraken {args.pair} as {symbol}, polling every {args.interval}s", flush=True)
+    print(f"# kraken {list(zip(pairs, names))}, polling every {args.interval}s", flush=True)
 
     while True:
         if args.seconds and time.monotonic() - started >= args.seconds:
             break
 
         try:
-            ticker = fetch("Ticker", {"pair": args.pair})
-            key = next(iter(ticker))
-            entry = ticker[key]
-            # a = [price, whole lot volume, lot volume]; b likewise.
-            ask_px, _, ask_qty = entry["a"]
-            bid_px, _, bid_qty = entry["b"]
+            for pair, symbol in zip(pairs, names):
+                ticker = fetch("Ticker", {"pair": pair})
+                key = next(iter(ticker))
+                entry = ticker[key]
+                # a = [price, whole lot volume, lot volume]; b likewise.
+                ask_px, _, ask_qty = entry["a"]
+                bid_px, _, bid_qty = entry["b"]
 
-            quote = (bid_px, bid_qty, ask_px, ask_qty)
-            if quote != last_quote:
-                # No venue timestamp on this endpoint, so this is when the
-                # bridge saw it. See the module note.
-                observed = time.time_ns()
-                print(
-                    f"Q {symbol} {observed} {bid_px} {bid_qty} {ask_px} {ask_qty}",
-                    flush=True,
-                )
-                last_quote = quote
-                quotes += 1
-
-            params = {"pair": args.pair}
-            if since is not None:
-                params["since"] = since
-            recent = fetch("Trades", params)
-            first_poll = since is None
-            since = recent.get("last", since)
-            for pair_key, rows in recent.items():
-                if pair_key == "last":
-                    continue
-                if first_poll:
-                    # Without a cursor Kraken hands back its last thousand
-                    # trades, which reach over an hour into the past. Emitting
-                    # those would replay an hour of history at full speed and
-                    # let a strategy trade on prices that are long gone — the
-                    # session's first second would be a backtest wearing a live
-                    # session's clothes. Take the cursor, drop the backlog.
+                quote = (bid_px, bid_qty, ask_px, ask_qty)
+                if quote != last_quote[pair]:
+                    # No venue timestamp on this endpoint, so this is when the
+                    # bridge saw it. See the module note.
+                    observed = time.time_ns()
                     print(
-                        f"# skipped {len(rows)} historical trades on the first poll",
-                        file=sys.stderr,
+                        f"Q {symbol} {observed} {bid_px} {bid_qty} {ask_px} {ask_qty}",
                         flush=True,
                     )
-                    continue
-                for row in rows:
-                    # [price, volume, time, buy/sell, order type, misc, id]
-                    price, volume, when, side = row[0], row[1], row[2], row[3]
-                    print(
-                        f"T {symbol} {seconds_to_nanos(when)} {price} {volume} "
-                        f"{'B' if side == 'b' else 'S'}",
-                        flush=True,
-                    )
-                    trades += 1
+                    last_quote[pair] = quote
+                    quotes += 1
+
+                params = {"pair": pair}
+                if since[pair] is not None:
+                    params["since"] = since[pair]
+                recent = fetch("Trades", params)
+                first_poll = since[pair] is None
+                since[pair] = recent.get("last", since[pair])
+                for pair_key, rows in recent.items():
+                    if pair_key == "last":
+                        continue
+                    if first_poll:
+                        # Without a cursor Kraken hands back its last thousand
+                        # trades, which reach over an hour into the past.
+                        # Emitting those would replay an hour of history at
+                        # full speed and let a strategy trade on prices that
+                        # are long gone — the session's first second would be a
+                        # backtest wearing a live session's clothes. Take the
+                        # cursor, drop the backlog.
+                        print(
+                            f"# skipped {len(rows)} historical {symbol} trades "
+                            "on the first poll",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        continue
+                    for row in rows:
+                        # [price, volume, time, buy/sell, order type, misc, id]
+                        price, volume, when, side = row[0], row[1], row[2], row[3]
+                        print(
+                            f"T {symbol} {seconds_to_nanos(when)} {price} {volume} "
+                            f"{'B' if side == 'b' else 'S'}",
+                            flush=True,
+                        )
+                        trades += 1
 
             consecutive_failures = 0
 

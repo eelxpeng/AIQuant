@@ -1,3 +1,4 @@
+use core::fmt;
 use core::ops::{Add, Neg, Sub};
 
 use crate::error::ValueError;
@@ -388,5 +389,73 @@ impl Neg for Notional {
     #[inline]
     fn neg(self) -> Notional {
         Notional(-self.0)
+    }
+}
+
+/// Renders a scaled value as a decimal, for a human reading a report.
+///
+/// Always nine fractional places, never trimmed. `0.1` and `0.100000000` are
+/// the same number, but two sessions printed under different trimming rules
+/// look like they disagree when only their formatting did — and comparing two
+/// runs is the main thing anyone does with these numbers.
+///
+/// Goes through [`fmt::Formatter::pad`] so a width in the format string works:
+/// a column of figures that does not line up is a column nobody checks.
+fn write_scaled(scaled: i128, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    // Widest case: a sign, 39 integer digits, a point, and nine places.
+    let mut buf = [0u8; 64];
+    let mut at = buf.len();
+
+    let magnitude = scaled.unsigned_abs();
+    let mut frac = magnitude % SCALE_U128;
+    let mut int = magnitude / SCALE_U128;
+
+    for _ in 0..SCALE_DIGITS {
+        at -= 1;
+        buf[at] = b'0' + (frac % 10) as u8;
+        frac /= 10;
+    }
+    at -= 1;
+    buf[at] = b'.';
+    loop {
+        at -= 1;
+        buf[at] = b'0' + (int % 10) as u8;
+        int /= 10;
+        if int == 0 {
+            break;
+        }
+    }
+    if scaled < 0 {
+        at -= 1;
+        buf[at] = b'-';
+    }
+
+    // Every byte written above is ASCII, so this cannot fail. Reporting the
+    // error rather than substituting a placeholder keeps a formatting bug
+    // visible instead of printing a number that is not the value.
+    match core::str::from_utf8(&buf[at..]) {
+        Ok(text) => f.pad(text),
+        Err(_) => Err(fmt::Error),
+    }
+}
+
+const SCALE_U128: u128 = SCALE as u128;
+const SCALE_DIGITS: u32 = 9;
+
+impl fmt::Display for Px {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_scaled(self.0 as i128, f)
+    }
+}
+
+impl fmt::Display for Qty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_scaled(self.0 as i128, f)
+    }
+}
+
+impl fmt::Display for Notional {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_scaled(self.0, f)
     }
 }

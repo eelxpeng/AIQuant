@@ -1,11 +1,12 @@
 //! Paper trading: a live feed, a simulated venue, and no venue risk.
 //!
 //! ```text
-//! paper <symbol> <market-source> <output.log> [tick] [lot]
+//! paper <session.conf> <market-source> <output.log>
 //! ```
 //!
-//! `market-source` is a path — a file, or a FIFO a bridge writes into — or `-`
-//! for standard input. Operator commands are read from standard input, one word
+//! `session.conf` says what to trade, under what limits, with which strategies
+//! (`crates/config`). `market-source` is a path — a file, or a FIFO a bridge
+//! writes into — or `-` for standard input. Operator commands are read from standard input, one word
 //! per line: `halt`, `resume`, `kill`, `flatten`. (With `-` as the source there
 //! is no console left to type into, so commands are disabled.)
 //!
@@ -29,52 +30,27 @@
 //! paper BTCUSD /tmp/md session.log 0.01 0.00000001
 //! ```
 
+use config::SessionConfig;
 use engine::{Engine, EngineConfig, FeedAdapter};
 use event::codec::{InstrumentEntry, LogHeader};
 use event::{BackgroundLog, EngineState};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
-use marketdata::{Aggregator, BarSpec};
-use risk::{LimitBook, Limits};
+use marketdata::Aggregator;
 use sim_venue::{Fees, FillModel, SimVenue};
 use std::fs::File;
 use std::time::{Duration, Instant};
 use strategy::MovingAverageCrossover;
-use types::{
-    Clock as _, ExchangeSpan, Instrument, InstrumentId, Notional, OrderId, Px, Qty, SCALE,
-    StrategyId, Timestamp,
-};
+use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
 
-const INSTRUMENT: InstrumentId = InstrumentId::new(0);
 /// How often the session says what it is doing.
 const STATUS_EVERY: Duration = Duration::from_secs(5);
 
-fn qty(whole: i64) -> Qty {
-    Qty::from_scaled(whole * SCALE)
-}
-
-fn money(whole: i64) -> Notional {
-    Notional::from_scaled(whole as i128 * SCALE as i128)
-}
-
-fn decimal(scaled: i128) -> String {
-    let unit = SCALE as i128;
-    let sign = if scaled < 0 { "-" } else { "" };
-    let magnitude = scaled.unsigned_abs();
-    format!(
-        "{sign}{}.{:09}",
-        magnitude / unit as u128,
-        magnitude % unit as u128
-    )
-}
-
 fn usage() -> ! {
-    eprintln!("usage: paper <symbol> <market-source> <output.log> [tick] [lot]");
+    eprintln!("usage: paper <session.conf> <market-source> <output.log>");
     eprintln!();
-    eprintln!("  symbol          what the feed calls the instrument");
+    eprintln!("  session.conf    what to trade, under what limits, with which strategies");
     eprintln!("  market-source   a path to read events from, or - for stdin");
     eprintln!("  output.log      where to record the session; must not exist");
-    eprintln!("  tick            price increment as a decimal (default 0.01)");
-    eprintln!("  lot             quantity increment as a decimal (default 0.000001)");
     eprintln!();
     eprintln!("operator commands are read from stdin: halt, resume, kill, flatten");
     eprintln!();
@@ -91,51 +67,42 @@ fn fail(context: &str, e: impl std::fmt::Display) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.len() < 3 || args.len() > 5 {
+    if args.len() != 3 {
         usage();
     }
-    let symbol = &args[0];
-    let source_path = &args[1];
-    let log_path = &args[2];
-    let tick = Px::from_decimal(args.get(3).map(String::as_str).unwrap_or("0.01"))
-        .unwrap_or_else(|e| fail("tick", e));
-    let lot = Qty::from_decimal(args.get(4).map(String::as_str).unwrap_or("0.000001"))
-        .unwrap_or_else(|e| fail("lot", e));
+    let (config_path, source_path, log_path) = (&args[0], &args[1], &args[2]);
 
-    let instrument = Instrument::new(INSTRUMENT, tick, lot, lot)
-        .unwrap_or_else(|e| fail("instrument conventions", e));
-
-    // Limits are this session's policy. Generous, because paper carries no
-    // venue risk — a live binding would want them argued over.
-    let mut limits = LimitBook::with_instruments(1);
-    limits
-        .set(
-            INSTRUMENT,
-            Limits {
-                max_position: qty(1_000),
-                max_exposure: money(10_000_000),
-                max_order_notional: money(1_000_000),
-                max_orders_in_window: 60,
-                rate_window: ExchangeSpan::from_nanos(60_000_000_000),
-                max_quote_age: ExchangeSpan::from_nanos(30_000_000_000),
-            },
-        )
-        .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
+    let session = SessionConfig::load(config_path)
+        .unwrap_or_else(|e| fail(&format!("cannot read {config_path}"), e));
+    let instruments = session.instrument_list();
 
     let clock = SystemClock::new();
     let started = clock.receive_time();
 
+    // The header carries every instrument, so the recording is interpretable
+    // without this config file — and a backtest over it will refuse a config
+    // that disagrees.
+    let entries: Vec<InstrumentEntry> = session
+        .instruments
+        .iter()
+        .map(|i| {
+            InstrumentEntry::new(i.instrument, &i.symbol)
+                .unwrap_or_else(|e| fail(&format!("symbol {}", i.symbol), e))
+        })
+        .collect();
     let header = LogHeader::new(
         started.to_nanos().unsigned_abs(),
         Timestamp::from_nanos(0),
         OrderId::new(0),
-        vec![InstrumentEntry::new(instrument, symbol).unwrap_or_else(|e| fail("symbol", e))],
+        entries,
     );
     let log = BackgroundLog::create(log_path, header, 1 << 16)
         .unwrap_or_else(|e| fail(&format!("cannot create {log_path}"), e));
 
     let mut symbols = Symbols::new();
-    symbols.add(symbol.clone(), INSTRUMENT);
+    for instrument in &session.instruments {
+        symbols.add(instrument.symbol.clone(), instrument.id);
+    }
 
     // Standard input is either the market data or the operator's console. It
     // cannot be both, and pretending otherwise would silently eat commands.
@@ -151,7 +118,7 @@ fn main() {
 
     // The binding that makes this paper rather than live.
     let venue = SimVenue::new(
-        1,
+        instruments.len(),
         FillModel::TouchDisplayed,
         Fees {
             maker: Px::ZERO,
@@ -161,32 +128,40 @@ fn main() {
     );
 
     let config = EngineConfig::new(
-        vec![instrument],
-        limits,
+        instruments.clone(),
+        session.limits.clone(),
         OrderId::new(0),
         Timestamp::from_nanos(0),
     );
     let mut engine = Engine::new(config, venue, log);
-    let subscription = engine
-        .add_aggregator(Aggregator::new(INSTRUMENT, BarSpec::Tick { threshold: 1 }).expect("spec"));
-    engine
-        .add_strategy(Box::new(MovingAverageCrossover::new(
-            StrategyId::new(0),
-            INSTRUMENT,
-            subscription,
-            20,
-            qty(1),
-        )))
-        .expect("strategy");
+    for (index, spec) in session.strategies.iter().enumerate() {
+        let subscription = engine.add_aggregator(
+            Aggregator::new(spec.instrument, spec.bars).expect("the config validated this"),
+        );
+        engine
+            .add_strategy(Box::new(MovingAverageCrossover::new(
+                StrategyId::new(index as u16),
+                spec.instrument,
+                subscription,
+                spec.window,
+                spec.size,
+            )))
+            .unwrap_or_else(|e| fail("strategy", format!("{e:?}")));
+    }
 
-    println!("paper session on {symbol}");
+    println!("paper session from {config_path}");
     println!("  market source  {source_path}");
     println!("  recording to   {log_path}");
-    println!(
-        "  tick / lot     {} / {}",
-        decimal(tick.to_scaled() as i128),
-        decimal(lot.to_scaled() as i128)
-    );
+    for i in &session.instruments {
+        println!(
+            "  instrument     {} (id {})  tick {}  lot {}",
+            i.symbol,
+            i.id.raw(),
+            i.instrument.tick(),
+            i.instrument.lot()
+        );
+    }
+    println!("  strategies     {}", session.strategies.len());
     if source_path == "-" {
         println!("  commands       disabled (stdin is the market source)");
     } else {
@@ -217,7 +192,7 @@ fn main() {
                     "  order {} {:?} {} @ {:?}",
                     order.id(),
                     order.side(),
-                    decimal(order.qty().to_scaled() as i128),
+                    order.qty(),
                     order.kind()
                 );
             }
@@ -226,13 +201,20 @@ fn main() {
 
         if last_status.elapsed() >= STATUS_EVERY {
             last_status = Instant::now();
-            let position = engine.positions().get(INSTRUMENT).expect("configured");
+            let held: Vec<String> = session
+                .instruments
+                .iter()
+                .map(|i| {
+                    let p = engine.positions().get(i.id).expect("configured");
+                    format!("{} {}", i.symbol, p.qty())
+                })
+                .collect();
             println!(
-                "  [{:?}] {} events, {} orders, position {}",
+                "  [{:?}] {} events, {} orders, {}",
                 engine.state(),
                 feed.market_events(),
                 engine.orders().len(),
-                decimal(position.qty().to_scaled() as i128),
+                held.join("  "),
             );
         }
 
@@ -246,9 +228,6 @@ fn main() {
         eprintln!("paper: the feed stopped: {e}");
     }
 
-    let position = engine.positions().get(INSTRUMENT).expect("configured");
-    let realized = position.realized();
-    let held = position.qty();
     let state = engine.state();
     let market_events = feed.market_events();
     let commands_seen = feed.commands_seen();
@@ -259,8 +238,15 @@ fn main() {
     println!("  market events   {market_events}");
     println!("  commands        {commands_seen}");
     println!("  orders          {orders}");
-    println!("  realized        {}", decimal(realized.to_scaled()));
-    println!("  position        {}", decimal(held.to_scaled() as i128));
+    for i in &session.instruments {
+        let p = engine.positions().get(i.id).expect("configured");
+        println!(
+            "  {:<14}  realized {}  position {}",
+            i.symbol,
+            p.realized(),
+            p.qty()
+        );
+    }
     println!("  final state     {state:?}");
 
     // Persist and say whether it worked, rather than dropping the answer.

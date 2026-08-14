@@ -9,12 +9,14 @@ members = [
     "crates/engine",
     "crates/simkit",
     "crates/report",
+    "crates/config",
     "crates/adapters/sim",
     "crates/adapters/historical",
     "crates/adapters/live",
     "bin/record",
     "bin/paper",
     "bin/backtest",
+    "bin/journal",
 ]
 resolver = "3"
 

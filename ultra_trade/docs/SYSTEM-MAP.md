@@ -35,11 +35,21 @@ graph LR
 | `paper` | **live** | simulated | trade a real market with no money at risk |
 | *`live`* | live | **real** | not built — it is `paper` with the venue swapped |
 
+A fourth binary, `journal`, binds nothing: it reads a recording back and says
+what happened (§6).
+
+All three take the same **session config** — what to trade, under what limits,
+with which strategies (`examples/kraken.conf`):
+
 ```bash
-cargo run -p record   -- session.log 2000          # make a recording
-cargo run -p backtest -- session.log               # run a strategy over it
-cargo run -p paper    -- XBTUSD /tmp/md live.log 0.1 0.00000001
+cargo run -p record   -- examples/kraken.conf session.log 2000
+cargo run -p backtest -- session.log examples/kraken.conf
+cargo run -p paper    -- examples/kraken.conf /tmp/md live.log
 ```
+
+Give `backtest` the config a recording was made under and it reproduces the
+session; give it a different one to ask what another policy would have done over
+the same market.
 
 ---
 
@@ -155,7 +165,15 @@ graph TD
     eng --> live["adapters/live"]
     oms --> sim["adapters/sim"]
     oms --> rep["report"]
+
+    risk --> cfg["<b>config</b><br/>the session file"]
+    md --> cfg
+    cfg -.->|"read at startup only"| BINS["the three binaries"]
 ```
+
+`config` points *into* the binaries, not into the engine. The engine is handed
+instruments and limits as values; it has never read a file and cannot tell that
+one exists. That is what keeps a test able to build a session in three lines.
 
 | Crate | Owns | Notably does **not** know about |
 |---|---|---|
@@ -170,9 +188,10 @@ graph TD
 | `adapters/historical` | a recording, replayed as a feed | orders |
 | `adapters/live` | live feed, line protocol, **the one real clock** | venues, orders |
 | `report` | log → PnL, drawdown, refusals | engine internals |
+| `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**19,600 lines, 358 tests, zero third-party dependencies** in the trading path.
+**21,000 lines, 386 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -210,6 +229,21 @@ the code makes you name it: `Replaying::MarketDataOnly` is a **backtest**, and
 `Replaying::EveryInput` is a **replay**. Feeding a recording's venue reports back
 in *and* binding a simulated venue would deliver every fill twice.
 
+`bin/journal` is the tool that reads one:
+
+```bash
+journal session.log            # decisions, and what the venue said back
+journal session.log --all      # every record, market data included
+journal session.log --fills    # each fill with the running position and profit
+journal session.log --curve    # the same as CSV, for plotting
+```
+
+It re-derives the books through `oms`'s accounting rather than reimplementing
+it, so its numbers cannot drift from the session's. It is also the only check
+that a recording is decodable by something *other than the code that wrote it*
+— which is what makes "the log is the audit trail" a fact rather than an
+intention. A recording whose tail a crash tore off still reads, and says so.
+
 **Why 80 bytes, fixed.** Record *n* sits at `header + n × 80`, so seeking to a
 sequence number is arithmetic, and a file that ends mid-record is detectable from
 its length alone. Every record carries a CRC and a format version. The header
@@ -221,21 +255,27 @@ instruments disagree with its own.
 
 ## 7. Verified end to end
 
-A live paper session against Kraken, then a backtest of its own recording:
+A live paper session against Kraken — **two instruments at once** — and then a
+backtest of its own recording, under the same config file:
 
 ```text
-                  live       backtest of its recording
-  orders            80             80
-  refused            1              1     StaleMarketData, both
-  position      +1.000         +1.000
-  realized      -16.60         -18.09
-  fees            0.00           1.49
+                     live      backtest of its recording
+  orders               19            19
+  refused               0             0
+  XBTUSD realized   -4.600        -4.705      position -0.500 both
+  ETHUSD realized   -0.080        -0.290      position +5.000 both
+  fees               0.000         0.315
 ```
 
-−16.60 − 1.49 = −18.09, to the scale unit. Same decisions, same refusal and the
-same reason, same final position; the entire difference is the fees the backtest
-charges and the paper session did not. That is backtest/live parity demonstrated
-against real market data rather than asserted.
+−4.600 − 0.105 = −4.705 and −0.080 − 0.210 = −0.290, and those two fee figures
+sum to the 0.315 reported. Same orders, same refusals, same final position on
+each book; the entire difference is the fees the backtest charges and the paper
+session did not. Parity is demonstrated against real market data, per
+instrument, rather than asserted.
+
+An earlier single-instrument session, before the config existed, showed the
+same thing on one book: 80 orders each side, one `StaleMarketData` refusal each
+side, −16.60 − 1.49 = −18.09.
 
 ---
 
@@ -250,4 +290,5 @@ So the map is not mistaken for the territory:
 | `client` | operator commands come from stdin; there is no separate UI process |
 | Latency budget | never measured. The feed is ~6s behind the market, so it cannot be measured with this bridge. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |
-| Config files | instruments and risk limits are command-line arguments and constants in the binaries |
+| Per-strategy config beyond the crossover | one strategy kind exists, so `strategy crossover` is the only form the config accepts |
+| A session start time in the log header | the header has the field; both writers leave it zero, because at that moment no exchange clock has been observed and a receive time is not one. `journal` derives the span from the records instead. |

@@ -98,10 +98,22 @@ jobs:
       - name: Record and backtest smoke
         run: |
           set -euo pipefail
+          conf="${RUNNER_TEMP:-/tmp}/smoke.conf"
           log="${RUNNER_TEMP:-/tmp}/smoke-session.log"
-          rm -f "$log"
-          cargo run -p record --locked --offline -- "$log" 500
-          cargo run -p backtest --locked --offline -- "$log"
+          rm -f "$log" "$conf"
+          # Two instruments, so the smoke covers more than the single-instrument
+          # path every binary used to hardcode.
+          cat > "$conf" <<'CONF'
+          instrument SMOKE tick 0.01 lot 1 min 1
+          instrument OTHER tick 0.01 lot 1 min 1
+          limits SMOKE max-position 50 max-exposure 1000000 max-order-notional 500000 max-orders 60 rate-window 60s max-quote-age 30s
+          limits OTHER max-position 50 max-exposure 1000000 max-order-notional 500000 max-orders 60 rate-window 60s max-quote-age 30s
+          strategy crossover SMOKE window 10 size 5
+          strategy crossover OTHER window 10 size 3
+          CONF
+          sed -i 's/^          //' "$conf"
+          cargo run -p record --locked --offline -- "$conf" "$log" 500
+          cargo run -p backtest --locked --offline -- "$log" "$conf"
 
           # And the paper path: a bridge-shaped feed, a live clock, a recording,
           # then a backtest over what paper produced.
@@ -114,8 +126,26 @@ jobs:
             echo "Q SMOKE $t $p.00 5 $((p + 1)).00 5"
             echo "T SMOKE $((t + 50000000)) $p.50 1 B"
           done > "$md"
-          cargo run -p paper --locked --offline -- SMOKE "$md" "$paper_log" 0.01 0.01 < /dev/null
-          cargo run -p backtest --locked --offline -- "$paper_log"
+          cargo run -p paper --locked --offline -- "$conf" "$md" "$paper_log" < /dev/null
+          cargo run -p backtest --locked --offline -- "$paper_log" "$conf"
+
+          # Read the recording back. This is the only check that the log is
+          # decodable by something other than the code that wrote it, and the
+          # fills view re-derives the books independently of the session that
+          # produced them.
+          cargo run -p journal --locked --offline -- "$paper_log" > /dev/null
+          cargo run -p journal --locked --offline -- "$paper_log" --all > /dev/null
+          cargo run -p journal --locked --offline -- "$paper_log" --fills > /dev/null
+          cargo run -p journal --locked --offline -- "$paper_log" --curve > /dev/null
+
+          # A recording with its tail cut off is the state a crash leaves, and
+          # the tool has to survive it rather than refuse the file. Cut into
+          # the last record and check it still reports.
+          torn="${RUNNER_TEMP:-/tmp}/smoke-torn.log"
+          cp "$paper_log" "$torn"
+          truncate -s $(( $(stat -c%s "$torn") - 37 )) "$torn"
+          cargo run -p journal --locked --offline -- "$torn" --fills \
+            | grep -q "recording is incomplete"
 
   repeatability:
     name: allocation counter, 20 runs
