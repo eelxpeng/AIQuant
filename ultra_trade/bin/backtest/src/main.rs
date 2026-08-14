@@ -47,21 +47,6 @@ fn money(whole: i64) -> Notional {
     Notional::from_scaled(whole as i128 * SCALE as i128)
 }
 
-/// Renders a fixed-point value as a decimal.
-///
-/// Formatting, and off the hot path by construction: this runs once, after the
-/// session (Constitution VI).
-fn decimal(scaled: i128) -> String {
-    let unit = SCALE as i128;
-    let sign = if scaled < 0 { "-" } else { "" };
-    let magnitude = scaled.unsigned_abs();
-    format!(
-        "{sign}{}.{:09}",
-        magnitude / unit as u128,
-        magnitude % unit as u128
-    )
-}
-
 fn usage() -> ! {
     eprintln!("usage: backtest <recorded.log> [session.conf]");
     eprintln!();
@@ -227,23 +212,17 @@ fn main() {
     for (reason, count) in &summary.rejections {
         println!("      {reason:?}: {count}");
     }
-    println!(
-        "  realized           {}",
-        decimal(summary.realized.to_scaled())
-    );
-    println!("  fees               {}", decimal(summary.fees.to_scaled()));
-    println!(
-        "  max drawdown       {}",
-        decimal(summary.max_drawdown.to_scaled())
-    );
+    println!("  realized           {}", summary.realized);
+    println!("  fees               {}", summary.fees);
+    println!("  max drawdown       {}", summary.max_drawdown);
     println!("  final state        {:?}", summary.final_state);
     for entry in &header.instruments {
         let position = engine.positions().get(entry.id).expect("configured");
         println!(
             "  {:<14}     realized {}  position {}",
             entry.symbol_str().unwrap_or("?"),
-            decimal(position.realized().to_scaled()),
-            decimal(position.qty().to_scaled() as i128)
+            position.realized(),
+            position.qty()
         );
     }
 

@@ -35,6 +35,9 @@ graph LR
 | `paper` | **live** | simulated | trade a real market with no money at risk |
 | *`live`* | live | **real** | not built — it is `paper` with the venue swapped |
 
+A fourth binary, `journal`, binds nothing: it reads a recording back and says
+what happened (§6).
+
 All three take the same **session config** — what to trade, under what limits,
 with which strategies (`examples/kraken.conf`):
 
@@ -188,7 +191,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**20,300 lines, 380 tests, zero third-party dependencies** in the trading path.
+**21,000 lines, 386 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -225,6 +228,21 @@ The difference between the first two is the thing most likely to trip you up, so
 the code makes you name it: `Replaying::MarketDataOnly` is a **backtest**, and
 `Replaying::EveryInput` is a **replay**. Feeding a recording's venue reports back
 in *and* binding a simulated venue would deliver every fill twice.
+
+`bin/journal` is the tool that reads one:
+
+```bash
+journal session.log            # decisions, and what the venue said back
+journal session.log --all      # every record, market data included
+journal session.log --fills    # each fill with the running position and profit
+journal session.log --curve    # the same as CSV, for plotting
+```
+
+It re-derives the books through `oms`'s accounting rather than reimplementing
+it, so its numbers cannot drift from the session's. It is also the only check
+that a recording is decodable by something *other than the code that wrote it*
+— which is what makes "the log is the audit trail" a fact rather than an
+intention. A recording whose tail a crash tore off still reads, and says so.
 
 **Why 80 bytes, fixed.** Record *n* sits at `header + n × 80`, so seeking to a
 sequence number is arithmetic, and a file that ends mid-record is detectable from
@@ -273,3 +291,4 @@ So the map is not mistaken for the territory:
 | Latency budget | never measured. The feed is ~6s behind the market, so it cannot be measured with this bridge. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |
 | Per-strategy config beyond the crossover | one strategy kind exists, so `strategy crossover` is the only form the config accepts |
+| A session start time in the log header | the header has the field; both writers leave it zero, because at that moment no exchange clock has been observed and a receive time is not one. `journal` derives the span from the records instead. |

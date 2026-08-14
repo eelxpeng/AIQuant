@@ -129,6 +129,24 @@ jobs:
           cargo run -p paper --locked --offline -- "$conf" "$md" "$paper_log" < /dev/null
           cargo run -p backtest --locked --offline -- "$paper_log" "$conf"
 
+          # Read the recording back. This is the only check that the log is
+          # decodable by something other than the code that wrote it, and the
+          # fills view re-derives the books independently of the session that
+          # produced them.
+          cargo run -p journal --locked --offline -- "$paper_log" > /dev/null
+          cargo run -p journal --locked --offline -- "$paper_log" --all > /dev/null
+          cargo run -p journal --locked --offline -- "$paper_log" --fills > /dev/null
+          cargo run -p journal --locked --offline -- "$paper_log" --curve > /dev/null
+
+          # A recording with its tail cut off is the state a crash leaves, and
+          # the tool has to survive it rather than refuse the file. Cut into
+          # the last record and check it still reports.
+          torn="${RUNNER_TEMP:-/tmp}/smoke-torn.log"
+          cp "$paper_log" "$torn"
+          truncate -s $(( $(stat -c%s "$torn") - 37 )) "$torn"
+          cargo run -p journal --locked --offline -- "$torn" --fills \
+            | grep -q "recording is incomplete"
+
   repeatability:
     name: allocation counter, 20 runs
     runs-on: ubuntu-latest

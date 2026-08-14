@@ -16,6 +16,7 @@ members = [
     "bin/record",
     "bin/paper",
     "bin/backtest",
+    "bin/journal",
 ]
 resolver = "3"
 

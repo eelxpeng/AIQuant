@@ -40,21 +40,10 @@ use sim_venue::{Fees, FillModel, SimVenue};
 use std::fs::File;
 use std::time::{Duration, Instant};
 use strategy::MovingAverageCrossover;
-use types::{Clock as _, ExchangeSpan, OrderId, Px, SCALE, StrategyId, Timestamp};
+use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
 
 /// How often the session says what it is doing.
 const STATUS_EVERY: Duration = Duration::from_secs(5);
-
-fn decimal(scaled: i128) -> String {
-    let unit = SCALE as i128;
-    let sign = if scaled < 0 { "-" } else { "" };
-    let magnitude = scaled.unsigned_abs();
-    format!(
-        "{sign}{}.{:09}",
-        magnitude / unit as u128,
-        magnitude % unit as u128
-    )
-}
 
 fn usage() -> ! {
     eprintln!("usage: paper <session.conf> <market-source> <output.log>");
@@ -168,8 +157,8 @@ fn main() {
             "  instrument     {} (id {})  tick {}  lot {}",
             i.symbol,
             i.id.raw(),
-            decimal(i.instrument.tick().to_scaled() as i128),
-            decimal(i.instrument.lot().to_scaled() as i128)
+            i.instrument.tick(),
+            i.instrument.lot()
         );
     }
     println!("  strategies     {}", session.strategies.len());
@@ -203,7 +192,7 @@ fn main() {
                     "  order {} {:?} {} @ {:?}",
                     order.id(),
                     order.side(),
-                    decimal(order.qty().to_scaled() as i128),
+                    order.qty(),
                     order.kind()
                 );
             }
@@ -217,7 +206,7 @@ fn main() {
                 .iter()
                 .map(|i| {
                     let p = engine.positions().get(i.id).expect("configured");
-                    format!("{} {}", i.symbol, decimal(p.qty().to_scaled() as i128))
+                    format!("{} {}", i.symbol, p.qty())
                 })
                 .collect();
             println!(
@@ -254,8 +243,8 @@ fn main() {
         println!(
             "  {:<14}  realized {}  position {}",
             i.symbol,
-            decimal(p.realized().to_scaled()),
-            decimal(p.qty().to_scaled() as i128)
+            p.realized(),
+            p.qty()
         );
     }
     println!("  final state     {state:?}");
