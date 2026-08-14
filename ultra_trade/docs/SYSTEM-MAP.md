@@ -237,21 +237,27 @@ instruments disagree with its own.
 
 ## 7. Verified end to end
 
-A live paper session against Kraken, then a backtest of its own recording:
+A live paper session against Kraken — **two instruments at once** — and then a
+backtest of its own recording, under the same config file:
 
 ```text
-                  live       backtest of its recording
-  orders            80             80
-  refused            1              1     StaleMarketData, both
-  position      +1.000         +1.000
-  realized      -16.60         -18.09
-  fees            0.00           1.49
+                     live      backtest of its recording
+  orders               19            19
+  refused               0             0
+  XBTUSD realized   -4.600        -4.705      position -0.500 both
+  ETHUSD realized   -0.080        -0.290      position +5.000 both
+  fees               0.000         0.315
 ```
 
-−16.60 − 1.49 = −18.09, to the scale unit. Same decisions, same refusal and the
-same reason, same final position; the entire difference is the fees the backtest
-charges and the paper session did not. That is backtest/live parity demonstrated
-against real market data rather than asserted.
+−4.600 − 0.105 = −4.705 and −0.080 − 0.210 = −0.290, and those two fee figures
+sum to the 0.315 reported. Same orders, same refusals, same final position on
+each book; the entire difference is the fees the backtest charges and the paper
+session did not. Parity is demonstrated against real market data, per
+instrument, rather than asserted.
+
+An earlier single-instrument session, before the config existed, showed the
+same thing on one book: 80 orders each side, one `StaleMarketData` refusal each
+side, −16.60 − 1.49 = −18.09.
 
 ---
 
