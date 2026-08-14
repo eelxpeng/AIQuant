@@ -26,7 +26,13 @@ Two honest limitations of polling REST rather than reading a websocket:
 
   Quotes are sampled, not streamed. Between two polls the book moved and this
   did not see it. Trades are not sampled: the Trades endpoint returns every
-  trade since a cursor, so no trade is missed.
+  trade since a cursor, so no trade is missed after the first poll.
+
+  The first poll's trades are discarded. Kraken answers a cursor-less request
+  with its last thousand trades, reaching over an hour back, and emitting them
+  would replay an hour of history at full speed into a live session. A strategy
+  that needs warming up should be warmed on a recorded session, not have
+  history smuggled in as live data.
 
 Numbers are never parsed through a float. `json.loads(parse_float=str)` keeps
 them as text, and the decimal is converted to integer nanoseconds and passed
@@ -126,9 +132,23 @@ def main():
             if since is not None:
                 params["since"] = since
             recent = fetch("Trades", params)
+            first_poll = since is None
             since = recent.get("last", since)
             for pair_key, rows in recent.items():
                 if pair_key == "last":
+                    continue
+                if first_poll:
+                    # Without a cursor Kraken hands back its last thousand
+                    # trades, which reach over an hour into the past. Emitting
+                    # those would replay an hour of history at full speed and
+                    # let a strategy trade on prices that are long gone — the
+                    # session's first second would be a backtest wearing a live
+                    # session's clothes. Take the cursor, drop the backlog.
+                    print(
+                        f"# skipped {len(rows)} historical trades on the first poll",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     continue
                 for row in rows:
                     # [price, volume, time, buy/sell, order type, misc, id]
