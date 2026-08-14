@@ -7,8 +7,8 @@
 use engine::{Engine, EngineConfig, FeedAdapter, run};
 use event::codec::{InstrumentEntry, LogHeader};
 use event::{
-    Command, CommandEvent, Event, Inbound, LogFileError, LogWriter, MarketEvent, MarketKind,
-    MemoryLog, Outbound, Record, StopReason,
+    Command, CommandEvent, Event, Inbound, LogFileError, MarketEvent, MarketKind, MemoryLog,
+    Outbound, Record, Segments, StopReason,
 };
 use historical::{HistoricalFeed, Replaying};
 use marketdata::{Aggregator, BarSpec, BarSubscription, TopOfBook};
@@ -54,14 +54,23 @@ impl TempLog {
         let _ = std::fs::remove_file(&path);
         TempLog(path)
     }
+    /// The session root — what a caller names. No file lives here.
     fn path(&self) -> &Path {
         &self.0
+    }
+
+    /// The file a segment's records are actually in, for tests that damage it.
+    fn segment(&self, index: u32) -> PathBuf {
+        Segments::path(&self.0, index)
     }
 }
 
 impl Drop for TempLog {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
+        for index in 0..8 {
+            let _ = std::fs::remove_file(Segments::path(&self.0, index));
+        }
     }
 }
 
@@ -225,7 +234,7 @@ fn wire<V: oms::VenueAdapter, L: event::EventLog>(
 /// Records a session to `path` and returns the books its strategy saw.
 fn record(path: &Path, commands: bool) -> (Vec<TopOfBook>, Vec<Record>) {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let writer = LogWriter::create(path, log_header()).expect("create");
+    let writer = Segments::create(path, log_header()).expect("create");
     let mut engine = wire(sim(), writer, &seen);
     let mut feed = ListFeed {
         events: market(commands),
@@ -234,8 +243,11 @@ fn record(path: &Path, commands: bool) -> (Vec<TopOfBook>, Vec<Record>) {
     run(&mut feed, &mut engine).expect("session");
     drop(engine);
 
-    let mut reader = event::LogReader::open(path).expect("open");
-    let records = reader.read_all_intact().expect("intact");
+    let (records, recovery) = Segments::read_all(path).expect("open");
+    assert!(
+        recovery.is_clean(),
+        "the session just written should be intact"
+    );
     let books = seen.borrow().clone();
     (books, records)
 }
@@ -456,7 +468,7 @@ fn a_damaged_recording_is_refused_unless_the_caller_asks_to_salvage_it() {
     let keep = header.offset_of(recorded.len() as u64 - 1) + 20;
     OpenOptions::new()
         .write(true)
-        .open(temp.path())
+        .open(temp.segment(0))
         .expect("open")
         .set_len(keep)
         .expect("truncate");
@@ -481,7 +493,11 @@ fn a_damaged_recording_is_refused_unless_the_caller_asks_to_salvage_it() {
 #[test]
 fn a_file_that_is_not_a_recording_is_refused() {
     let temp = TempLog::new("garbage");
-    std::fs::write(temp.path(), b"not a log, just some bytes sitting in a file").expect("write");
+    std::fs::write(
+        temp.segment(0),
+        b"not a log, just some bytes sitting in a file",
+    )
+    .expect("write");
     assert!(matches!(
         HistoricalFeed::open(temp.path(), &instruments(), Replaying::MarketDataOnly),
         Err(LogFileError::Codec(_))

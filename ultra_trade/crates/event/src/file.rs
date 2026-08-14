@@ -59,6 +59,17 @@ pub enum LogFileError {
     },
     /// A read found damage and the caller asked for an intact log.
     Damaged(Recovery),
+    /// A session's segments skip a number, so a file is missing.
+    ///
+    /// Reading the segments before the hole would report part of a session as
+    /// all of it, which is a conclusion someone acts on (`Segments`).
+    MissingSegment {
+        /// The segment that is not there.
+        missing: u32,
+        /// A later segment that is, which is what makes this a hole rather
+        /// than the end of the chain.
+        found: u32,
+    },
 }
 
 impl fmt::Display for LogFileError {
@@ -71,6 +82,10 @@ impl fmt::Display for LogFileError {
                 write!(f, "no record at {seq}; the file holds {available}")
             }
             LogFileError::Damaged(recovery) => write!(f, "{recovery}"),
+            LogFileError::MissingSegment { missing, found } => write!(
+                f,
+                "this session is missing segment {missing}, but segment {found} is present"
+            ),
         }
     }
 }
@@ -189,6 +204,21 @@ pub struct LogWriter {
 impl LogWriter {
     /// Creates a new log, failing if one already exists at that path.
     pub fn create(path: impl AsRef<Path>, header: LogHeader) -> Result<LogWriter, LogFileError> {
+        LogWriter::create_at(path, header, Seq::FIRST)
+    }
+
+    /// Creates a log whose first record carries `first`.
+    ///
+    /// A session continued after a crash starts part-way through its own
+    /// sequence (`Segments`, and the recovery contract's D-1). Sequence
+    /// numbers are the engine's only ordering key, so a continued segment that
+    /// restarted at zero would not be the same session — it would be a second
+    /// one wearing the first one's name.
+    pub fn create_at(
+        path: impl AsRef<Path>,
+        header: LogHeader,
+        first: Seq,
+    ) -> Result<LogWriter, LogFileError> {
         let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -208,7 +238,7 @@ impl LogWriter {
         Ok(LogWriter {
             file,
             header,
-            next: 0,
+            next: first.raw(),
             buffer: Vec::with_capacity(BUFFERED_RECORDS * RECORD_LEN),
             last_error: None,
         })
@@ -328,6 +358,16 @@ pub struct LogReader {
     whole_records: u64,
     /// Bytes of an incomplete final record, if the file was torn.
     partial_bytes: u64,
+    /// The sequence number this file's first record carries.
+    ///
+    /// Zero for a session that never crashed, and something else for a
+    /// segment continuing one that did (`Segments`). Read from the first
+    /// record rather than from a header field, which is what lets a chain
+    /// work without a format change (recovery contract, D-1).
+    ///
+    /// `None` when the file holds no whole record, where there is no honest
+    /// answer and nothing that needs one.
+    base: Option<Seq>,
 }
 
 impl LogReader {
@@ -354,11 +394,27 @@ impl LogReader {
 
         let header_len = header.encoded_len() as u64;
         let body = file_len - header_len;
+        let whole_records = body / RECORD_LEN as u64;
+
+        // Where this file's sequence starts. One record read at open, off any
+        // hot path, and it is what lets every later offset be arithmetic.
+        // A first record that will not decode leaves the base unknown; the
+        // damage is then reported by `read_all` rather than guessed at here.
+        let base = if whole_records > 0 {
+            let mut first = [0u8; RECORD_LEN];
+            file.seek(SeekFrom::Start(header.encoded_len() as u64))?;
+            file.read_exact(&mut first)?;
+            decode_record(&first).ok().map(|record| record.seq)
+        } else {
+            None
+        };
+
         Ok(LogReader {
             file,
             header,
-            whole_records: body / RECORD_LEN as u64,
+            whole_records,
             partial_bytes: body % RECORD_LEN as u64,
+            base,
         })
     }
 
@@ -379,15 +435,20 @@ impl LogReader {
     /// A seek and one read: the whole reason the format uses a fixed record
     /// size (ADR, D-2).
     pub fn read_at(&mut self, seq: Seq) -> Result<Record, LogFileError> {
-        if seq.raw() >= self.whole_records {
+        let base = self.base.map(Seq::raw).unwrap_or(0);
+        let Some(index) = seq
+            .raw()
+            .checked_sub(base)
+            .filter(|i| *i < self.whole_records)
+        else {
             return Err(LogFileError::NoSuchRecord {
                 seq,
                 available: self.whole_records,
             });
-        }
+        };
         let mut bytes = [0u8; RECORD_LEN];
         self.file
-            .seek(SeekFrom::Start(self.header.offset_of(seq.raw())))?;
+            .seek(SeekFrom::Start(self.header.offset_of(index)))?;
         self.file.read_exact(&mut bytes)?;
         Ok(decode_record(&bytes)?)
     }
@@ -405,11 +466,15 @@ impl LogReader {
         let mut bytes = [0u8; RECORD_LEN];
         let mut stopped = None;
 
+        // A segment continuing a crashed session starts part-way through the
+        // sequence, so what is checked is that records are contiguous from
+        // wherever this file begins — not that they begin at zero.
+        let base = self.base.map(Seq::raw).unwrap_or(0);
         for index in 0..self.whole_records {
             self.file.read_exact(&mut bytes)?;
             match decode_record(&bytes) {
                 Ok(record) => {
-                    let expected = Seq::new(index);
+                    let expected = Seq::new(base + index);
                     if record.seq != expected {
                         stopped = Some(StopReason::SequenceGap {
                             expected,

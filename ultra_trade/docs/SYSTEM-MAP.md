@@ -45,6 +45,7 @@ with which strategies (`examples/kraken.conf`):
 cargo run -p record   -- examples/kraken.conf session.log 2000
 cargo run -p backtest -- session.log examples/kraken.conf
 cargo run -p paper    -- examples/kraken.conf /tmp/md live.log
+cargo run -p journal  -- session.log --fills
 ```
 
 Give `backtest` the config a recording was made under and it reproduces the
@@ -191,7 +192,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**21,000 lines, 386 tests, zero third-party dependencies** in the trading path.
+**21,400 lines, 396 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -244,6 +245,24 @@ that a recording is decodable by something *other than the code that wrote it*
 — which is what makes "the log is the audit trail" a fact rather than an
 intention. A recording whose tail a crash tore off still reads, and says so.
 
+**A session is a chain of files, not one file.** `session.log` names the
+session; its records live in `session.0.log`. If a crash tears the tail off
+that file, the damaged file is **never written to again** — recovery opens
+`session.1.log`, whose first record carries the next sequence number, and the
+chain reads back as one gap-free session.
+
+```text
+session.0.log   seq 0 … 8_193      torn tail, left exactly as the crash left it
+session.1.log   seq 8_194 …        the session continues here
+```
+
+Numbering the *first* segment is what makes this safe. If the first segment
+were the bare `session.log`, a tool that forgot to look for `session.1.log`
+would read part of a session and report it as all of it. Instead the bare path
+holds nothing, so that tool fails loudly. Sequence numbers are the engine's
+only ordering key, so a chain that restarts at zero or skips a number is not
+one session — and `Segments::read_all` refuses it rather than concatenating.
+
 **Why 80 bytes, fixed.** Record *n* sits at `header + n × 80`, so seeking to a
 sequence number is arithmetic, and a file that ends mid-record is detectable from
 its length alone. Every record carries a CRC and a format version. The header
@@ -286,7 +305,7 @@ So the map is not mistaken for the territory:
 | Missing | Consequence |
 |---|---|
 | `bin/live` and a real venue adapter | nothing can lose money yet, by construction |
-| Crash recovery | the contract is written (`adr/1-crash-recovery-contract.md`), the code is not. A restart does not reconcile against the venue. |
+| Crash recovery, the *policy* | the contract is written (`adr/1-crash-recovery-contract.md`) and its D-1 — the segment chain — is built. What is missing is D-2 to D-4: a restart does not yet rebuild its position, start halted, or reconcile against the venue. No binary opens a second segment yet. |
 | `client` | operator commands come from stdin; there is no separate UI process |
 | Latency budget | never measured. The feed is ~6s behind the market, so it cannot be measured with this bridge. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |

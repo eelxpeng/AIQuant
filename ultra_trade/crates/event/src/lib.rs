@@ -20,6 +20,7 @@ mod file;
 mod inbound;
 mod log;
 mod outbound;
+mod segments;
 
 pub use background::{BackgroundLog, LogSink, WriterReport};
 pub use file::{LogFileError, LogReader, LogWriter, Recovery, StopReason};
@@ -29,6 +30,7 @@ pub use inbound::{
 };
 pub use log::{Cursor, EventLog, FORMAT_VERSION, LogError, MemoryLog, Record, Seq};
 pub use outbound::{EngineState, Intent, OrderKind, Outbound, RiskReason, StateReason};
+pub use segments::Segments;
 
 /// One entry in the log: either something that happened to the system, or
 /// something the system decided.

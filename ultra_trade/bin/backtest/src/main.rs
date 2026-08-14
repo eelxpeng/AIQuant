@@ -28,7 +28,7 @@
 
 use config::{SessionConfig, StrategyConfig};
 use engine::{Engine, EngineConfig, run};
-use event::{LogReader, Outbound};
+use event::{Outbound, Segments};
 use historical::{HistoricalFeed, Replaying};
 use marketdata::{Aggregator, BarSpec};
 use report::summarize;
@@ -73,11 +73,10 @@ fn main() {
 
     // The instruments come from the recording, so this run cannot disagree with
     // it about what `InstrumentId(0)` means.
-    let reader = match LogReader::open(path) {
-        Ok(reader) => reader,
+    let header = match Segments::header(std::path::Path::new(path)) {
+        Ok(header) => header,
         Err(e) => fail(&format!("cannot read {path}"), e),
     };
-    let header = reader.header().clone();
     let instruments: Vec<Instrument> = header
         .instruments
         .iter()
@@ -89,7 +88,6 @@ fn main() {
     if instruments.is_empty() {
         fail("the recording has no instruments", "nothing to trade");
     }
-    drop(reader);
 
     // Limits and strategies are this run's policy.
     let session = args.get(1).map(|conf| {

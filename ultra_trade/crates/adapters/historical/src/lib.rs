@@ -44,7 +44,7 @@
 
 use engine::FeedAdapter;
 use event::codec::LogHeader;
-use event::{Inbound, LogFileError, LogReader, Outbound, Record, Recovery};
+use event::{Inbound, LogFileError, Outbound, Record, Recovery, Segments};
 use std::path::Path;
 use strategy::TimerRequest;
 use types::{ExchangeTime, Instrument, Timestamp};
@@ -93,7 +93,11 @@ pub struct HistoricalFeed {
 }
 
 impl HistoricalFeed {
-    /// Opens a recorded session, refusing a damaged file.
+    /// Opens a recorded session, refusing a damaged one.
+    ///
+    /// `path` names the *session* — every segment of it is read as one record
+    /// stream, because a session that crashed and continued is still one
+    /// session (`Segments`).
     ///
     /// `instruments` is the configuration this session will run under, and it
     /// **must** match what the file was recorded with. Without that check,
@@ -105,20 +109,13 @@ impl HistoricalFeed {
         instruments: &[Instrument],
         mode: Replaying,
     ) -> Result<HistoricalFeed, LogFileError> {
-        let mut reader = LogReader::open(path)?;
-        reader.header().check_against(instruments)?;
-        let records = reader.read_all_intact()?;
-        let recovery = Recovery {
-            records: records.len() as u64,
-            discarded_bytes: 0,
-            stopped: None,
-        };
-        Ok(Self::from_parts(
-            reader.header().clone(),
-            records,
-            mode,
-            recovery,
-        ))
+        let header = Segments::header(path.as_ref())?;
+        header.check_against(instruments)?;
+        let (records, recovery) = Segments::read_all(path.as_ref())?;
+        if !recovery.is_clean() {
+            return Err(LogFileError::Damaged(recovery));
+        }
+        Ok(Self::from_parts(header, records, mode, recovery))
     }
 
     /// Opens a recorded session, accepting a damaged one.
@@ -132,15 +129,10 @@ impl HistoricalFeed {
         instruments: &[Instrument],
         mode: Replaying,
     ) -> Result<HistoricalFeed, LogFileError> {
-        let mut reader = LogReader::open(path)?;
-        reader.header().check_against(instruments)?;
-        let (records, recovery) = reader.read_all()?;
-        Ok(Self::from_parts(
-            reader.header().clone(),
-            records,
-            mode,
-            recovery,
-        ))
+        let header = Segments::header(path.as_ref())?;
+        header.check_against(instruments)?;
+        let (records, recovery) = Segments::read_all(path.as_ref())?;
+        Ok(Self::from_parts(header, records, mode, recovery))
     }
 
     fn from_parts(

@@ -21,7 +21,7 @@
 use config::SessionConfig;
 use engine::{Engine, EngineConfig, FeedAdapter, run};
 use event::codec::{InstrumentEntry, LogHeader};
-use event::{Inbound, LogWriter, MarketEvent, MarketKind};
+use event::{Inbound, MarketEvent, MarketKind, Segments};
 use marketdata::Aggregator;
 use sim_venue::{Fees, FillModel, SimVenue};
 use strategy::MovingAverageCrossover;
@@ -151,7 +151,7 @@ fn main() {
             .collect(),
     );
 
-    let writer = match LogWriter::create(path, header) {
+    let writer = match Segments::create(std::path::Path::new(path), header) {
         Ok(writer) => writer,
         Err(e) => {
             eprintln!("record: cannot create {path}: {e}");
