@@ -247,13 +247,14 @@ latency measurement, never for market-state logic.
 _Avoid_: Exchange time, monotonic time
 
 **Bridge**:
-The venue-specific half of a live feed, living outside this repository: it
-connects to an exchange and prints normalized events in the feed's line
-protocol. Keeping it outside is what stops a TLS and WebSocket stack from
-arriving as a side effect of wanting market data, and what lets one feed
-adapter serve every venue.
-_Avoid_: Feed adapter (that is the part inside), gateway, connector as a
-synonym for the venue adapter
+The venue-specific half of a live feed: it connects to an exchange and prints
+normalized events in the feed's line protocol. It lives outside the Rust
+workspace — `tools/` holds examples, but nothing there is linked into a trading
+binary. That separation is what stops a TLS and WebSocket stack from arriving as
+a side effect of wanting market data, and what lets one feed adapter serve every
+venue.
+_Avoid_: Feed adapter (that is the part inside the workspace), gateway,
+connector as a synonym for the venue adapter
 
 **Monotonic Time**:
 The injected local monotonic clock, used for elapsed-time and timeout logic.

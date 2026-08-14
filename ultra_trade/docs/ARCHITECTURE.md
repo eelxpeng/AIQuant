@@ -3,6 +3,10 @@
 Design source of truth. Boundaries and ownership live here; behavior contracts
 live in `specs/`; status lives in GitHub issues.
 
+**New here?** [`SYSTEM-MAP.md`](SYSTEM-MAP.md) is the orientation: what exists,
+how a market event travels through it, and where the data comes from. This file
+is the *why* behind the boundaries it describes.
+
 **Status: ratified** for v1 (#2, 2026-08-11). The crate table and the six seams
 below are decisions, not proposals. Changing one is an architecture change: open
 an issue, record the reason, and land it here before the code that depends on it.
