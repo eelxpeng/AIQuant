@@ -17,3 +17,9 @@ strategy = { path = "../strategy" }
 trybuild = "1"
 simkit = { path = "../simkit" }
 sim_venue = { path = "../adapters/sim" }
+
+[[bench]]
+name = "step"
+# Hand-rolled: the trading path has no third-party dependencies and a benchmark
+# is not a reason to acquire the first one.
+harness = false

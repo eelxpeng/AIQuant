@@ -350,7 +350,7 @@ So the map is not mistaken for the territory:
 | `bin/live` and a real venue adapter | nothing can lose money yet, by construction |
 | Crash recovery against a **real** venue | D-1, D-2 and a simulated-venue form of D-4 are built (§6b). D-3 — ask the venue for its open orders and cancel by *its* list — needs a venue that can be asked, and no real venue exists. A `Recovering` engine state (D-6) would also be a wire-format change, so it waits for that work. |
 | `client` | operator commands come from stdin; there is no separate UI process |
-| Latency budget | never measured. The feed is ~6s behind the market, so it cannot be measured with this bridge. |
+| Latency budget | no budget is declared. `cargo bench -p engine` now measures the hot path (~88 ns/event, one instrument, one strategy) so changes can be compared, but nothing says what the number is *allowed* to be. End-to-end latency still cannot be measured at all: the REST bridge is ~6s behind the market. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |
 | Per-strategy config beyond the crossover | one strategy kind exists, so `strategy crossover` is the only form the config accepts |
 | A session start time in the log header | the header has the field; both writers leave it zero, because at that moment no exchange clock has been observed and a receive time is not one. `journal` derives the span from the records instead. |
