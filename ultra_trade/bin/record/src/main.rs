@@ -22,9 +22,7 @@ use config::SessionConfig;
 use engine::{Engine, EngineConfig, FeedAdapter, run};
 use event::codec::{InstrumentEntry, LogHeader};
 use event::{Inbound, MarketEvent, MarketKind, Segments};
-use marketdata::Aggregator;
 use sim_venue::{Fees, FillModel, SimVenue};
-use strategy::MovingAverageCrossover;
 use types::{ExchangeSpan, OrderId, Px, Qty, SCALE, Side, StrategyId, Timestamp};
 
 const STEP_NANOS: i64 = 1_000_000_000;
@@ -180,17 +178,16 @@ fn main() {
 
     let mut engine = Engine::new(config, venue, writer);
     for (index, spec) in session.strategies.iter().enumerate() {
-        let subscription =
-            engine.add_aggregator(Aggregator::new(spec.instrument, spec.bars).expect("validated"));
-        engine
-            .add_strategy(Box::new(MovingAverageCrossover::new(
-                StrategyId::new(index as u16),
-                spec.instrument,
-                subscription,
-                spec.window,
-                spec.size,
-            )))
-            .expect("strategy");
+        // The config builds its own strategy: which kind it is, and which
+        // settings that kind takes, are its business rather than every
+        // binary's.
+        let strategy = spec.build(StrategyId::new(index as u16), |aggregator| {
+            engine.add_aggregator(aggregator)
+        });
+        engine.add_strategy(strategy).unwrap_or_else(|e| {
+            eprintln!("record: strategy: {e:?}");
+            std::process::exit(1);
+        });
     }
 
     if let Err(e) = run(&mut feed, &mut engine) {

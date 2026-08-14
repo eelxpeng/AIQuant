@@ -109,7 +109,10 @@ jobs:
           limits SMOKE max-position 50 max-exposure 1000000 max-order-notional 500000 max-orders 60 rate-window 60s max-quote-age 30s
           limits OTHER max-position 50 max-exposure 1000000 max-order-notional 500000 max-orders 60 rate-window 60s max-quote-age 30s
           strategy crossover SMOKE window 10 size 5
-          strategy crossover OTHER window 10 size 3
+          # Both strategy kinds, because they exercise opposite halves of the
+          # order lifecycle: the crossover takes with market orders, the quoter
+          # rests limit orders and has to cancel them.
+          strategy quote OTHER half-spread 0.5 size 1 reprice 0.25 max-inventory 10
           CONF
           sed -i 's/^          //' "$conf"
           cargo run -p record --locked --offline -- "$conf" "$log" 500
@@ -171,6 +174,11 @@ jobs:
           # And the two segments read back as one session.
           cargo run -p journal --locked --offline -- "$paper_log" \
             | grep -q "2 segments"
+          # A recovery pulls whatever was resting, so the resumed segment must
+          # open with cancels rather than leaving quotes live in a halted
+          # session (contract D-3).
+          cargo run -p journal --locked --offline -- "$paper_log" \
+            | grep -q "cancel"
 
   repeatability:
     name: allocation counter, 20 runs

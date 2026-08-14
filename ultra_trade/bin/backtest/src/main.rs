@@ -26,15 +26,14 @@
 //! to limits wide enough not to bind by accident and one crossover on the first
 //! instrument.
 
-use config::{SessionConfig, StrategyConfig};
+use config::{SessionConfig, StrategyConfig, StrategyKind};
 use engine::{Engine, EngineConfig, run};
 use event::{Outbound, Segments};
 use historical::{HistoricalFeed, Replaying};
-use marketdata::{Aggregator, BarSpec};
+use marketdata::BarSpec;
 use report::summarize;
 use risk::{LimitBook, Limits};
 use sim_venue::{Fees, FillModel, SimVenue};
-use strategy::MovingAverageCrossover;
 use types::{ExchangeSpan, Instrument, Notional, OrderId, Px, Qty, SCALE, StrategyId};
 
 const STEP_NANOS: i128 = 1_000_000_000;
@@ -130,9 +129,11 @@ fn main() {
                 vec![StrategyConfig {
                     instrument: first.id,
                     symbol: first.symbol_str().unwrap_or("?").to_string(),
-                    window: 20,
-                    size: qty(1),
-                    bars: BarSpec::Tick { threshold: 1 },
+                    kind: StrategyKind::Crossover {
+                        window: 20,
+                        size: qty(1),
+                        bars: BarSpec::Tick { threshold: 1 },
+                    },
                 }],
             )
         }
@@ -169,16 +170,11 @@ fn main() {
     );
     let mut engine = Engine::new(config, venue, event::MemoryLog::with_capacity(1 << 16));
     for (index, spec) in strategies.iter().enumerate() {
-        let subscription =
-            engine.add_aggregator(Aggregator::new(spec.instrument, spec.bars).expect("validated"));
+        let strategy = spec.build(StrategyId::new(index as u16), |aggregator| {
+            engine.add_aggregator(aggregator)
+        });
         engine
-            .add_strategy(Box::new(MovingAverageCrossover::new(
-                StrategyId::new(index as u16),
-                spec.instrument,
-                subscription,
-                spec.window,
-                spec.size,
-            )))
+            .add_strategy(strategy)
             .unwrap_or_else(|e| fail("strategy", format!("{e:?}")));
     }
 

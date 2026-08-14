@@ -7,11 +7,13 @@ use types::{StrategyId, Timestamp};
 fn main() {
     let mut intents: Vec<Intent> = Vec::new();
     let mut timers: Vec<TimerRequest> = Vec::new();
+    let mut cancels = Vec::new();
     let mut ctx = Context::new(
         StrategyId::new(0),
         Timestamp::from_nanos(0),
         &mut intents,
         &mut timers,
+        &mut cancels,
     );
 
     // Legal, and here so this case cannot pass merely because the context does

@@ -18,6 +18,7 @@
 //!                max-orders 60   rate-window 60s      max-quote-age 30s
 //!
 //! strategy crossover BTCUSD  window 20  size 0.01
+//! strategy quote     ETHUSD  half-spread 0.5  size 1  max-inventory 10
 //! ```
 //!
 //! Hand-parsed rather than TOML or JSON, for the same reason the feed speaks
@@ -39,11 +40,12 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use marketdata::BarSpec;
+use marketdata::{Aggregator, BarSpec, BarSubscription};
 use risk::{LimitBook, Limits};
 use std::fmt;
 use std::path::Path;
-use types::{ExchangeSpan, Instrument, InstrumentId, Notional, Px, Qty, SCALE};
+use strategy::{MovingAverageCrossover, Quoter, Strategy};
+use types::{ExchangeSpan, Instrument, InstrumentId, Notional, Px, Qty, SCALE, StrategyId};
 
 /// Why a config could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,12 +102,97 @@ pub struct StrategyConfig {
     pub instrument: InstrumentId,
     /// The symbol, for messages.
     pub symbol: String,
-    /// Bars to average over.
-    pub window: usize,
-    /// The position magnitude it holds while a signal is on.
-    pub size: Qty,
-    /// Trades per bar.
-    pub bars: BarSpec,
+    /// Which strategy, and its settings.
+    pub kind: StrategyKind,
+}
+
+/// A strategy this build knows, with the settings only it takes.
+///
+/// An enum rather than one struct with every field, because the settings do
+/// not overlap: a quoter has no window and a crossover has no half-spread.
+/// Sharing one shape would mean fields that are meaningless for the strategy
+/// in hand, and a config could then set one and be silently ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StrategyKind {
+    /// Takes liquidity when a fast average crosses a slow one.
+    Crossover {
+        /// Bars to average over.
+        window: usize,
+        /// The position magnitude it holds while a signal is on.
+        size: Qty,
+        /// Trades per bar.
+        bars: BarSpec,
+    },
+    /// Rests a bid and an ask around the midpoint.
+    Quote {
+        /// How far either side of the midpoint to rest.
+        half_spread: Px,
+        /// Size on each side.
+        size: Qty,
+        /// How far the wanted price must move before a resting order is pulled.
+        reprice: Px,
+        /// The position beyond which it stops adding on that side.
+        max_inventory: Qty,
+    },
+}
+
+impl StrategyConfig {
+    /// Builds the strategy this describes.
+    ///
+    /// `register` is how the caller turns an [`Aggregator`] into a
+    /// [`BarSubscription`] — in practice `|a| engine.add_aggregator(a)`. It is
+    /// a closure rather than a subscription passed in because only some
+    /// strategies need bars: a quoter works off quotes and never calls it.
+    /// Handing one in would mean the caller deciding whether this strategy
+    /// wants bars, which is a decision it can get wrong and this type cannot.
+    pub fn build(
+        &self,
+        id: StrategyId,
+        mut register: impl FnMut(Aggregator) -> BarSubscription,
+    ) -> Box<dyn Strategy> {
+        match self.kind {
+            StrategyKind::Crossover { window, size, bars } => {
+                let aggregator =
+                    Aggregator::new(self.instrument, bars).expect("the parser validated this");
+                let subscription = register(aggregator);
+                Box::new(MovingAverageCrossover::new(
+                    id,
+                    self.instrument,
+                    subscription,
+                    window,
+                    size,
+                ))
+            }
+            StrategyKind::Quote {
+                half_spread,
+                size,
+                reprice,
+                max_inventory,
+            } => Box::new(Quoter::new(
+                id,
+                self.instrument,
+                half_spread,
+                size,
+                reprice,
+                max_inventory,
+            )),
+        }
+    }
+
+    /// A one-line description, for a session banner.
+    pub fn summary(&self) -> String {
+        match self.kind {
+            StrategyKind::Crossover { window, size, .. } => {
+                format!("crossover {} window {window} size {size}", self.symbol)
+            }
+            StrategyKind::Quote {
+                half_spread, size, ..
+            } => format!(
+                "quote {} half-spread {half_spread} size {size}",
+                self.symbol
+            ),
+        }
+    }
 }
 
 /// Everything a session needs to start.
@@ -141,7 +228,7 @@ impl SessionConfig {
     pub fn parse(text: &str) -> Result<SessionConfig, ConfigError> {
         let mut instruments: Vec<InstrumentConfig> = Vec::new();
         let mut pending_limits: Vec<(u64, String, Limits)> = Vec::new();
-        let mut strategies: Vec<(u64, String, usize, Qty, BarSpec)> = Vec::new();
+        let mut strategies: Vec<(u64, String, StrategyKind)> = Vec::new();
 
         for (index, raw) in text.lines().enumerate() {
             let line = index as u64 + 1;
@@ -159,7 +246,7 @@ impl SessionConfig {
                         return Err(ConfigError::at(line, format!("{symbol} is declared twice")));
                     }
                     let pairs = Pairs::read(fields, line)?;
-                    pairs.require(&["tick", "lot", "min"], line)?;
+                    pairs.require(&["tick", "lot", "min"], &[], line)?;
                     let tick = pairs.px("tick", line)?;
                     let lot = pairs.qty("lot", line)?;
                     let min = pairs.qty("min", line)?;
@@ -186,6 +273,7 @@ impl SessionConfig {
                             "rate-window",
                             "max-quote-age",
                         ],
+                        &[],
                         line,
                     )?;
                     let limits = Limits {
@@ -203,31 +291,86 @@ impl SessionConfig {
                 }
 
                 "strategy" => {
-                    let kind = named(&mut fields, line, "a strategy name")?;
-                    if kind != "crossover" {
-                        return Err(ConfigError::at(
-                            line,
-                            format!("{kind:?} is not a strategy this build knows; try crossover"),
-                        ));
-                    }
+                    let name = named(&mut fields, line, "a strategy name")?;
                     let symbol = named(&mut fields, line, "a symbol")?;
                     let pairs = Pairs::read(fields, line)?;
-                    pairs.require(&["window", "size"], line)?;
-                    let window = pairs.count("window", line)? as usize;
-                    if window == 0 {
-                        return Err(ConfigError::at(line, "window must be at least one bar"));
-                    }
-                    let size = pairs.qty("size", line)?;
-                    if size.to_scaled() <= 0 {
-                        return Err(ConfigError::at(line, "size must be positive"));
-                    }
-                    let bars = match pairs.get("bars") {
-                        None => BarSpec::Tick { threshold: 1 },
-                        Some(_) => BarSpec::Tick {
-                            threshold: pairs.count("bars", line)?,
-                        },
+                    let kind = match name.as_str() {
+                        "crossover" => {
+                            pairs.require(&["window", "size"], &["bars"], line)?;
+                            let window = pairs.count("window", line)? as usize;
+                            if window == 0 {
+                                return Err(ConfigError::at(
+                                    line,
+                                    "window must be at least one bar",
+                                ));
+                            }
+                            let size = pairs.qty("size", line)?;
+                            if size.to_scaled() <= 0 {
+                                return Err(ConfigError::at(line, "size must be positive"));
+                            }
+                            let bars = match pairs.get("bars") {
+                                None => BarSpec::Tick { threshold: 1 },
+                                Some(_) => BarSpec::Tick {
+                                    threshold: pairs.count("bars", line)?,
+                                },
+                            };
+                            StrategyKind::Crossover { window, size, bars }
+                        }
+                        "quote" => {
+                            pairs.require(
+                                &["half-spread", "size", "max-inventory"],
+                                &["reprice"],
+                                line,
+                            )?;
+                            let half_spread = pairs.px("half-spread", line)?;
+                            if half_spread.to_scaled() <= 0 {
+                                return Err(ConfigError::at(
+                                    line,
+                                    "half-spread must be positive, or the quotes cross",
+                                ));
+                            }
+                            let size = pairs.qty("size", line)?;
+                            if size.to_scaled() <= 0 {
+                                return Err(ConfigError::at(line, "size must be positive"));
+                            }
+                            // Defaults to the half-spread: a quote is worth
+                            // moving once the market has drifted as far as the
+                            // edge it was trying to earn.
+                            let reprice = match pairs.get("reprice") {
+                                None => half_spread,
+                                Some(_) => pairs.px("reprice", line)?,
+                            };
+                            if reprice.to_scaled() <= 0 {
+                                return Err(ConfigError::at(
+                                    line,
+                                    "reprice must be positive, or every tick costs a round trip",
+                                ));
+                            }
+                            let max_inventory = pairs.qty("max-inventory", line)?;
+                            if max_inventory.to_scaled() < 0 {
+                                return Err(ConfigError::at(
+                                    line,
+                                    "max-inventory cannot be negative",
+                                ));
+                            }
+                            StrategyKind::Quote {
+                                half_spread,
+                                size,
+                                reprice,
+                                max_inventory,
+                            }
+                        }
+                        other => {
+                            return Err(ConfigError::at(
+                                line,
+                                format!(
+                                    "{other:?} is not a strategy this build knows; \
+                                     try crossover or quote"
+                                ),
+                            ));
+                        }
                     };
-                    strategies.push((line, symbol, window, size, bars));
+                    strategies.push((line, symbol, kind));
                 }
 
                 other => {
@@ -280,14 +423,12 @@ impl SessionConfig {
         }
 
         let mut resolved = Vec::new();
-        for (line, symbol, window, size, bars) in strategies {
+        for (line, symbol, kind) in strategies {
             let instrument = find(&symbol, line)?;
             resolved.push(StrategyConfig {
                 instrument,
                 symbol,
-                window,
-                size,
-                bars,
+                kind,
             });
         }
 
@@ -344,19 +485,26 @@ impl<'a> Pairs<'a> {
     ///
     /// Unknown keys are refused rather than ignored: a misspelled limit that is
     /// silently dropped is a limit that is not enforced.
-    fn require(&self, keys: &[&str], line: u64) -> Result<(), ConfigError> {
+    /// Checks the settings on a line against what the directive accepts.
+    ///
+    /// `optional` is spelled out rather than exempted in here, because a
+    /// hardcoded exemption is a per-directive rule hiding in a shared helper —
+    /// it was `bars`, and the second one would have been `reprice`.
+    fn require(&self, required: &[&str], optional: &[&str], line: u64) -> Result<(), ConfigError> {
         // Unknown keys first. A misspelled setting is the common mistake, and
         // naming the thing that was actually written beats telling someone
         // what is missing and leaving them to spot the typo themselves.
         for (key, _) in &self.entries {
-            if !keys.contains(key) && *key != "bars" {
+            if !required.contains(key) && !optional.contains(key) {
+                let mut known: Vec<&str> = required.to_vec();
+                known.extend_from_slice(optional);
                 return Err(ConfigError::at(
                     line,
-                    format!("{key:?} is not a setting here; expected one of {keys:?}"),
+                    format!("{key:?} is not a setting here; expected one of {known:?}"),
                 ));
             }
         }
-        for key in keys {
+        for key in required {
             if self.get(key).is_none() {
                 return Err(ConfigError::at(line, format!("missing {key:?}")));
             }

@@ -183,7 +183,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `marketdata` | top of book, bar aggregation | orders, positions |
 | `risk` | limits, the kill switch, the single gate | strategies, feeds |
 | `oms` | order state machine, FIFO position accounting, the venue trait | strategies |
-| `strategy` | the trait, one reference strategy | clocks, sockets, files |
+| `strategy` | the trait, and two strategies that use opposite halves of the order lifecycle | clocks, sockets, files |
 | `engine` | the loop that wires it all — a **library**, no `main` | which venue or feed is bound |
 | `adapters/sim` | simulated venue and fill model | feeds |
 | `adapters/historical` | a recording, replayed as a feed | orders |
@@ -193,7 +193,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `recovery` | bringing a crashed session back, and refusing to when it does not add up | feeds, clocks, which venue is bound |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**22,000 lines, 407 tests, zero third-party dependencies** in the trading path.
+**22,800 lines, 425 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -273,6 +273,33 @@ instruments disagree with its own.
 
 ---
 
+## 5b. Two strategies, and why the second one is not more arithmetic
+
+`crossover` takes liquidity with market orders. `quote` rests a bid and an ask
+around the midpoint and pulls them when the market drifts.
+
+The second one exists to be a different **shape**. A market order is live and
+gone inside one event; a resting order has to be named, watched, and cancelled.
+Until `quote` existed, everything under that second half — resting orders at
+the venue, limit prices through the risk gate, `CancelSubmitted` in the log,
+the order machine's `PendingCancel` — was built and had **no production
+caller**.
+
+Two seams had to be finished for it to be possible at all:
+
+| Missing | Why it mattered |
+|---|---|
+| A strategy could not learn its order's id | An order has no id until the gate approves and the venue accepts, so `ctx.order()` cannot return one. Without `StrategyEvent::OrderLive` a strategy could place a resting order and never manage it. |
+| A strategy could not cancel | Only the operator's flatten-and-kill sweep could. A quote you cannot pull is a quote that fills on every adverse move. |
+
+A strategy's cancel is recorded separately from the operator's sweep, because
+"who pulled this quote" is exactly the sort of question the log exists to
+answer. And a cancel is **not** put to the risk gate: pulling an order only
+reduces exposure, and a gate that could refuse one is a gate that can trap a
+strategy in a position.
+
+---
+
 ## 6b. Coming back from a crash
 
 Point `paper` at a session that already exists and it does not refuse and does
@@ -298,11 +325,16 @@ Four things in that picture are the whole design:
    regenerates them from the same market and the same orders, which is what
    rebuilds *the venue* — its book, its resting orders — instead of leaving it
    empty while the engine believes it is trading.
-3. **That makes reconciliation a real check.** The replay and the recording are
+3. **Whatever was resting is cancelled.** Reconstructing the venue brings
+   those orders back live, and left alone they keep filling while the session
+   is halted — the position moves and nobody decided that it should. The queue
+   position is lost, which is the price of coming back to a state somebody
+   chose (contract D-3).
+4. **That makes reconciliation a real check.** The replay and the recording are
    two independent accounts: one derived by trading forward through the venue,
    one by walking the recorded fills. They are compared per instrument, and a
    disagreement stops the session rather than picking a side.
-4. **It comes back halted.** A crash is an incident; leaving a halt is an
+5. **It comes back halted.** A crash is an incident; leaving a halt is an
    explicit operator decision and never automatic (Constitution V).
 
 Order ids continue rather than restart, because the replay drives the same
@@ -348,9 +380,9 @@ So the map is not mistaken for the territory:
 | Missing | Consequence |
 |---|---|
 | `bin/live` and a real venue adapter | nothing can lose money yet, by construction |
-| Crash recovery against a **real** venue | D-1, D-2 and a simulated-venue form of D-4 are built (§6b). D-3 — ask the venue for its open orders and cancel by *its* list — needs a venue that can be asked, and no real venue exists. A `Recovering` engine state (D-6) would also be a wire-format change, so it waits for that work. |
+| Crash recovery against a **real** venue | D-1, D-2, D-3 and a simulated-venue form of D-4 are built (§6b). D-3 cancels what the *reconstructed* venue holds; against a real one it has to ask the venue for its open orders instead, and no real venue exists to ask. A `Recovering` engine state (D-6) would also be a wire-format change, so it waits for that work. |
 | `client` | operator commands come from stdin; there is no separate UI process |
 | Latency budget | no budget is declared. `cargo bench -p engine` now measures the hot path (~88 ns/event, one instrument, one strategy) so changes can be compared, but nothing says what the number is *allowed* to be. End-to-end latency still cannot be measured at all: the REST bridge is ~6s behind the market. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |
-| Per-strategy config beyond the crossover | one strategy kind exists, so `strategy crossover` is the only form the config accepts |
+| More strategies | two kinds exist, `crossover` and `quote`. They were chosen to be different *shapes* rather than different arithmetic; a third would be research, and research enters through a spec. |
 | A session start time in the log header | the header has the field; both writers leave it zero, because at that moment no exchange clock has been observed and a receive time is not one. `journal` derives the span from the records instead. |

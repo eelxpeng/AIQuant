@@ -3,7 +3,7 @@
 //! The refusals matter more than the happy path. A config that is silently
 //! misread is a session trading under limits nobody chose.
 
-use config::{ConfigError, SessionConfig};
+use config::{ConfigError, SessionConfig, StrategyKind};
 use marketdata::BarSpec;
 use types::{InstrumentId, Px, Qty};
 
@@ -66,10 +66,21 @@ fn strategies_resolve_to_their_instrument() {
     let c = good();
     assert_eq!(c.strategies.len(), 2);
     assert_eq!(c.strategies[0].instrument, InstrumentId::new(0));
-    assert_eq!(c.strategies[0].window, 20);
-    assert_eq!(c.strategies[0].size, Qty::from_scaled(10_000_000));
-    assert_eq!(c.strategies[0].bars, BarSpec::Tick { threshold: 1 });
-    assert_eq!(c.strategies[1].bars, BarSpec::Tick { threshold: 4 });
+    assert_eq!(
+        c.strategies[0].kind,
+        StrategyKind::Crossover {
+            window: 20,
+            size: Qty::from_scaled(10_000_000),
+            bars: BarSpec::Tick { threshold: 1 },
+        }
+    );
+    assert!(matches!(
+        c.strategies[1].kind,
+        StrategyKind::Crossover {
+            bars: BarSpec::Tick { threshold: 4 },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -165,6 +176,10 @@ limits X max-position 1 max-exposure 1 max-order-notional 1 max-orders 1 rate-wi
 strategy magic X window 5 size 1
 ");
     assert!(e.message.contains("not a strategy this build knows"), "{e}");
+    assert!(
+        e.message.contains("quote"),
+        "it must name what it does know: {e}"
+    );
 }
 
 #[test]
@@ -232,4 +247,110 @@ wibble
 ");
     assert_eq!(e.line, 4, "{e}");
     assert_eq!(e.to_string(), format!("line 4: {}", e.message));
+}
+
+// ---- the quoting strategy ------------------------------------------------
+
+#[test]
+fn a_quote_strategy_reads_its_own_settings() {
+    let c = SessionConfig::parse(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy quote X half-spread 0.5 size 2 reprice 0.25 max-inventory 10
+",
+    )
+    .expect("parse");
+    assert_eq!(
+        c.strategies[0].kind,
+        StrategyKind::Quote {
+            half_spread: Px::from_scaled(500_000_000),
+            size: Qty::from_scaled(2_000_000_000),
+            reprice: Px::from_scaled(250_000_000),
+            max_inventory: Qty::from_scaled(10_000_000_000),
+        }
+    );
+}
+
+#[test]
+fn a_quote_strategy_defaults_reprice_to_its_half_spread() {
+    // A quote is worth moving once the market has drifted as far as the edge
+    // it was trying to earn. That is a defensible default; zero is not.
+    let c = SessionConfig::parse(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy quote X half-spread 0.5 size 2 max-inventory 10
+",
+    )
+    .expect("parse");
+    let StrategyKind::Quote {
+        half_spread,
+        reprice,
+        ..
+    } = c.strategies[0].kind
+    else {
+        panic!("expected a quoter");
+    };
+    assert_eq!(reprice, half_spread);
+}
+
+#[test]
+fn a_crossover_setting_on_a_quoter_is_refused_rather_than_ignored() {
+    // The reason the settings are an enum. `window` means nothing to a quoter,
+    // and silently accepting it would let someone tune a number that does not
+    // exist.
+    let e = err(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy quote X half-spread 0.5 size 2 max-inventory 10 window 20
+",
+    );
+    assert!(e.message.contains("window"), "{e}");
+}
+
+#[test]
+fn a_quoter_with_no_half_spread_is_refused() {
+    let e = err(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy quote X size 2 max-inventory 10
+",
+    );
+    assert!(e.message.contains("half-spread"), "{e}");
+}
+
+#[test]
+fn a_zero_half_spread_is_refused_because_the_quotes_would_cross() {
+    let e = err(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy quote X half-spread 0 size 2 max-inventory 10
+",
+    );
+    assert!(e.message.contains("cross"), "{e}");
+}
+
+#[test]
+fn the_two_strategy_kinds_can_run_side_by_side() {
+    let c = SessionConfig::parse(
+        "\
+instrument X tick 0.01 lot 1 min 1
+instrument Y tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+limits Y max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy crossover X window 5 size 1
+strategy quote Y half-spread 0.1 size 1 max-inventory 5
+",
+    )
+    .expect("parse");
+    assert_eq!(c.strategies.len(), 2);
+    assert!(matches!(
+        c.strategies[0].kind,
+        StrategyKind::Crossover { .. }
+    ));
+    assert!(matches!(c.strategies[1].kind, StrategyKind::Quote { .. }));
 }

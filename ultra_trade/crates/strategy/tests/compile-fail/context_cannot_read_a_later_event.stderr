@@ -1,5 +1,5 @@
 error[E0599]: no method named `peek_next_event` found for struct `strategy::Context<'a>` in the current scope
-  --> tests/compile-fail/context_cannot_read_a_later_event.rs:21:17
+  --> tests/compile-fail/context_cannot_read_a_later_event.rs:23:17
    |
-21 |     let _ = ctx.peek_next_event();
+23 |     let _ = ctx.peek_next_event();
    |                 ^^^^^^^^^^^^^^^ method not found in `strategy::Context<'_>`

@@ -181,7 +181,10 @@ impl Strategy for MovingAverageCrossover {
                 self.working -= side.sign() as i128 * unfilled.to_scaled() as i128;
             }
 
-            StrategyEvent::Quote { .. }
+            // This one trades at market, so an order is live and gone inside
+            // the same event and there is nothing to manage in between.
+            StrategyEvent::OrderLive { .. }
+            | StrategyEvent::Quote { .. }
             | StrategyEvent::Trade { .. }
             | StrategyEvent::Timer { .. } => {}
         }
@@ -242,11 +245,13 @@ mod tests {
     fn feed(s: &mut MovingAverageCrossover, event: &StrategyEvent<'_>) -> Vec<Intent> {
         let mut intents = Vec::new();
         let mut timers = Vec::new();
+        let mut cancels = Vec::new();
         let mut ctx = Context::new(
             s.id(),
             ExchangeTime::from_nanos(1),
             &mut intents,
             &mut timers,
+            &mut cancels,
         );
         s.on_event(event, &mut ctx);
         intents
@@ -498,11 +503,13 @@ mod refusals {
     fn deliver(s: &mut MovingAverageCrossover, event: &StrategyEvent<'_>) -> Vec<Intent> {
         let mut intents = Vec::new();
         let mut timers = Vec::new();
+        let mut cancels = Vec::new();
         let mut ctx = Context::new(
             s.id(),
             ExchangeTime::from_nanos(1),
             &mut intents,
             &mut timers,
+            &mut cancels,
         );
         s.on_event(event, &mut ctx);
         intents
