@@ -138,14 +138,21 @@ jobs:
           cargo run -p journal --locked --offline -- "$paper_log" --fills > /dev/null
           cargo run -p journal --locked --offline -- "$paper_log" --curve > /dev/null
 
+          # A session names a chain of segments, so its records are in
+          # `<name>.0.log`. Check that is really where they landed — the whole
+          # point of numbering the first segment is that nothing silently
+          # reads a bare path and reports part of a session as all of it.
+          test -f "${paper_log%.log}.0.log"
+          test ! -f "$paper_log"
+
           # A recording with its tail cut off is the state a crash leaves, and
           # the tool has to survive it rather than refuse the file. Cut into
           # the last record and check it still reports.
           torn="${RUNNER_TEMP:-/tmp}/smoke-torn.log"
-          cp "$paper_log" "$torn"
-          truncate -s $(( $(stat -c%s "$torn") - 37 )) "$torn"
+          cp "${paper_log%.log}.0.log" "${torn%.log}.0.log"
+          truncate -s $(( $(stat -c%s "${torn%.log}.0.log") - 37 )) "${torn%.log}.0.log"
           cargo run -p journal --locked --offline -- "$torn" --fills \
-            | grep -q "recording is incomplete"
+            | grep -q "cut off here"
 
   repeatability:
     name: allocation counter, 20 runs

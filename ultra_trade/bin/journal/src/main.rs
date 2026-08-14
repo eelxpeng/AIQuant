@@ -33,7 +33,7 @@
 
 use std::io::{self, Write};
 
-use event::{Command, Event, Inbound, LogReader, MarketKind, Outbound, Record, Seq, VenueKind};
+use event::{Command, Event, Inbound, MarketKind, Outbound, Record, Segments, Seq, VenueKind};
 use oms::Positions;
 use report::summarize;
 use types::{InstrumentId, Notional, OrderId, Px, Qty, Side};
@@ -146,12 +146,13 @@ fn main() {
 fn run() -> Result<(), Fault> {
     let args = parse_args()?;
 
-    let mut reader =
-        LogReader::open(&args.path).map_err(|e| format!("cannot read {}: {e}", args.path))?;
-    let header = reader.header().clone();
-    let (records, recovery) = reader
-        .read_all()
-        .map_err(|e| format!("cannot read {}: {e}", args.path))?;
+    // A session is its whole chain of segments, not one file: a session that
+    // crashed and continued is still one session (`Segments`).
+    let root = std::path::Path::new(&args.path);
+    let header = Segments::header(root).map_err(|e| format!("cannot read {}: {e}", args.path))?;
+    let (records, recovery) =
+        Segments::read_all(root).map_err(|e| format!("cannot read {}: {e}", args.path))?;
+    let segments = Segments::paths(root).map_err(|e| format!("cannot read {}: {e}", args.path))?;
 
     // Symbols by instrument id, so every later line can name an instrument
     // instead of numbering it. The header carries them precisely so a
@@ -182,17 +183,33 @@ fn run() -> Result<(), Fault> {
         "session {} · format {} · {}",
         header.session_id, header.format_version, recovery
     )?;
-    if !recovery.is_clean() {
-        // Said twice, and loudly. Every number below is derived from a
-        // truncated session, and a reader who misses that will draw a
-        // conclusion about a session that did not end where it looks like it
-        // ended.
+    // Two different kinds of damage, which need different words. A read that
+    // *stopped* means the session is cut off there and everything below is a
+    // partial session — a conclusion someone will act on. Bytes discarded
+    // without a stop means a crash lost records and the session carried on in
+    // the next segment: real, worth saying, and not the same thing at all.
+    if recovery.stopped.is_some() {
         writeln!(
             out,
-            "  !! this recording is incomplete — the session it describes did not end here"
+            "  !! this session is cut off here — everything below is a partial session"
+        )?;
+    } else if recovery.discarded_bytes > 0 {
+        writeln!(
+            out,
+            "  !! {} bytes were lost to a crash; the session continued after them",
+            recovery.discarded_bytes
         )?;
     }
     writeln!(out, "  first order {}", header.first_order_id)?;
+    if segments.len() > 1 {
+        // Worth saying plainly: more than one segment means the session was
+        // continued after a crash, which is context for everything below it.
+        writeln!(
+            out,
+            "  {} segments — this session was continued after a crash",
+            segments.len()
+        )?;
+    }
 
     // The header has a `session_start`, and today both writers leave it at
     // zero: at the moment a header is written no exchange clock has been

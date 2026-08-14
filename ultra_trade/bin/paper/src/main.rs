@@ -33,7 +33,7 @@
 use config::SessionConfig;
 use engine::{Engine, EngineConfig, FeedAdapter};
 use event::codec::{InstrumentEntry, LogHeader};
-use event::{BackgroundLog, EngineState};
+use event::{BackgroundLog, EngineState, Segments};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
 use marketdata::Aggregator;
 use sim_venue::{Fees, FillModel, SimVenue};
@@ -96,8 +96,13 @@ fn main() {
         OrderId::new(0),
         entries,
     );
-    let log = BackgroundLog::create(log_path, header, 1 << 16)
+    // A session is a chain of segments, so `session.log` names the session and
+    // the records land in `session.0.log` (`Segments`). A session continued
+    // after a crash adds a segment rather than a second unrelated file.
+    let first_segment = Segments::create_path(std::path::Path::new(log_path))
         .unwrap_or_else(|e| fail(&format!("cannot create {log_path}"), e));
+    let log = BackgroundLog::create(&first_segment, header, 1 << 16)
+        .unwrap_or_else(|e| fail(&format!("cannot create {}", first_segment.display()), e));
 
     let mut symbols = Symbols::new();
     for instrument in &session.instruments {
