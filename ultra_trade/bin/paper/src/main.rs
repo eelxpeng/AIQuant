@@ -36,6 +36,7 @@ use event::codec::{InstrumentEntry, LogHeader};
 use event::{BackgroundLog, EngineState, Segments};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
 use marketdata::Aggregator;
+use recovery::recover;
 use sim_venue::{Fees, FillModel, SimVenue};
 use std::fs::File;
 use std::time::{Duration, Instant};
@@ -97,12 +98,22 @@ fn main() {
         entries,
     );
     // A session is a chain of segments, so `session.log` names the session and
-    // the records land in `session.0.log` (`Segments`). A session continued
-    // after a crash adds a segment rather than a second unrelated file.
-    let first_segment = Segments::create_path(std::path::Path::new(log_path))
-        .unwrap_or_else(|e| fail(&format!("cannot create {log_path}"), e));
-    let log = BackgroundLog::create(&first_segment, header, 1 << 16)
-        .unwrap_or_else(|e| fail(&format!("cannot create {}", first_segment.display()), e));
+    // the records land in `session.0.log` (`Segments`). If a session is already
+    // there, this is a restart after a crash: continue the chain rather than
+    // refusing, and rebuild what it held before trading again.
+    let root = std::path::Path::new(log_path);
+    let resuming = !Segments::paths(root)
+        .unwrap_or_else(|e| fail(&format!("cannot read {log_path}"), e))
+        .is_empty();
+    let log = if resuming {
+        BackgroundLog::resume(root, 1 << 16)
+            .unwrap_or_else(|e| fail(&format!("cannot continue {log_path}"), e))
+    } else {
+        let first = Segments::create_path(root)
+            .unwrap_or_else(|e| fail(&format!("cannot create {log_path}"), e));
+        BackgroundLog::create(&first, header, 1 << 16)
+            .unwrap_or_else(|e| fail(&format!("cannot create {}", first.display()), e))
+    };
 
     let mut symbols = Symbols::new();
     for instrument in &session.instruments {
@@ -154,6 +165,18 @@ fn main() {
             .unwrap_or_else(|e| fail("strategy", format!("{e:?}")));
     }
 
+    // Rebuild what the crashed session held, by replaying its own recording
+    // through this engine and this venue (`recovery`). It ends halted, and
+    // only an operator resumes it (contract D-2).
+    let recovered = if resuming {
+        match recover(&mut engine, root) {
+            Ok(recovered) => Some(recovered),
+            Err(e) => fail(&format!("cannot recover {log_path}"), e),
+        }
+    } else {
+        None
+    };
+
     println!("paper session from {config_path}");
     println!("  market source  {source_path}");
     println!("  recording to   {log_path}");
@@ -167,6 +190,28 @@ fn main() {
         );
     }
     println!("  strategies     {}", session.strategies.len());
+    if let Some(recovered) = &recovered {
+        println!(
+            "  RESUMED        after a crash, from {} records",
+            recovered.records
+        );
+        if !recovered.recovery.is_clean() {
+            println!(
+                "                 {} — the tail was lost",
+                recovered.recovery
+            );
+        }
+        for position in recovered.from_log.iter() {
+            if !position.is_flat() {
+                println!(
+                    "                 holding {} of instrument {}",
+                    position.qty(),
+                    position.instrument().raw()
+                );
+            }
+        }
+        println!("  state          HALTED — type `resume` to trade again");
+    }
     if source_path == "-" {
         println!("  commands       disabled (stdin is the market source)");
     } else {
@@ -177,7 +222,10 @@ fn main() {
     // The pump, written here rather than using `engine::run`, so the session
     // can say what it is doing while it runs. It is the same three steps.
     let mut requests = Vec::new();
-    let mut reported_orders = 0usize;
+    // Orders a recovery replayed already happened and were announced by the
+    // session that placed them. Starting the counter past them keeps the
+    // resumed session from reporting a crash's history as things it just did.
+    let mut reported_orders = engine.orders().len();
     let mut last_status = Instant::now();
 
     while let Some(event) = feed.next_event() {

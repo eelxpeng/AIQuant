@@ -107,6 +107,24 @@ pub struct Engine<V: VenueAdapter, L: EventLog> {
     state: EngineState,
     mark_rule: MarkRule,
     now: ExchangeTime,
+    /// Whether events are being re-derived from records that are already in
+    /// the log.
+    ///
+    /// Set only between [`begin_replay`] and [`end_replay`], which a recovery
+    /// wraps around the recorded session (contract D-1). Everything else about
+    /// an event is unchanged — the book updates, the strategy runs, the venue
+    /// is driven — because the point is to arrive at the state the session
+    /// had, and anything skipped is state that would be missing.
+    ///
+    /// [`begin_replay`]: Engine::begin_replay
+    /// [`end_replay`]: Engine::end_replay
+    replaying: bool,
+    /// Stands in for the log's sequence while replaying.
+    ///
+    /// Nothing written during a replay reaches the log, so this never leaves
+    /// the engine; it exists because `caused_by` is not optional and a
+    /// fabricated value that never escapes is better than making it so.
+    replay_seq: u64,
 
     // Reused across events so a warmed session does not allocate.
     queue: VecDeque<Inbound>,
@@ -142,6 +160,8 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             state: EngineState::Running,
             mark_rule: config.mark_rule,
             now: config.session_start,
+            replaying: false,
+            replay_seq: 0,
             queue: VecDeque::with_capacity(cap.per_step),
             intents: Vec::with_capacity(cap.per_step),
             timers: Vec::with_capacity(cap.per_step),
@@ -195,6 +215,40 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             }
         }
         Ok(())
+    }
+
+    /// Re-derives state from events that are already in the log.
+    ///
+    /// Between this and [`end_replay`] the engine processes events normally —
+    /// the book updates, strategies run, the venue is driven — but writes
+    /// nothing, because every one of those records already exists. That is
+    /// what rebuilds a crashed session's state: not a second way to install
+    /// it, but the same path that produced it the first time (Constitution II).
+    ///
+    /// [`end_replay`]: Engine::end_replay
+    pub fn begin_replay(&mut self) {
+        self.replaying = true;
+    }
+
+    /// Ends a replay and halts, which is where a recovered session starts.
+    ///
+    /// Halted rather than running, and never automatic: a crash is an incident,
+    /// something should look at it before the system trades again, and leaving
+    /// a halt is an explicit operator decision (contract D-2, Constitution V).
+    ///
+    /// The halt is not itself logged. A fresh session does not record that it
+    /// started running either, and the segment boundary already says a
+    /// recovery happened; what must be logged is the operator's decision to
+    /// leave the halt, and that still is.
+    pub fn end_replay(&mut self) {
+        self.replaying = false;
+        self.state = EngineState::Halted;
+    }
+
+    /// Whether the engine is re-deriving state rather than trading.
+    #[inline]
+    pub const fn is_replaying(&self) -> bool {
+        self.replaying
     }
 
     /// Timer requests raised since the last call.
@@ -279,6 +333,19 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             || self.positions.iter().any(|p| p.lots_would_grow())
     }
 
+    /// Records a decision, unless it is already in the log.
+    ///
+    /// Every decision the engine makes goes through here. A replay re-derives
+    /// decisions that were recorded the first time round, so writing them
+    /// again would double them; suppressing them in one place means no caller
+    /// has to remember to.
+    fn record(&mut self, out: Outbound) -> Result<(), LogError> {
+        if self.replaying {
+            return Ok(());
+        }
+        self.log.append(Event::Out(out)).map(|_| ())
+    }
+
     // ---- one event -------------------------------------------------------
 
     fn step(&mut self, inbound: Inbound) -> Result<(), EngineError> {
@@ -286,11 +353,19 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         // point continuing: whatever the engine decided next would not be in
         // the log, and the session would stop being replayable. Halting is not
         // recorded either, for the same reason.
-        let seq = match self.log.append(Event::In(inbound)) {
-            Ok(seq) => seq,
-            Err(e) => {
-                self.state = EngineState::Halted;
-                return Err(EngineError::Log(e));
+        // Record the input before anything reads it — unless this event is
+        // already in the log, which is exactly what a replay is. Writing it
+        // again would duplicate the session it is rebuilding.
+        let seq = if self.replaying {
+            self.replay_seq += 1;
+            Seq::new(self.replay_seq)
+        } else {
+            match self.log.append(Event::In(inbound)) {
+                Ok(seq) => seq,
+                Err(e) => {
+                    self.state = EngineState::Halted;
+                    return Err(EngineError::Log(e));
+                }
             }
         };
 
@@ -470,12 +545,12 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
     ) -> Result<(), EngineError> {
         let from = self.state;
         self.state = to;
-        self.log.append(Event::Out(Outbound::StateChanged {
+        self.record(Outbound::StateChanged {
             caused_by,
             from,
             to,
             reason,
-        }))?;
+        })?;
         Ok(())
     }
 
@@ -494,10 +569,10 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
                 if let Some(order) = self.orders.get_mut(id) {
                     let _ = order.request_cancel(at);
                 }
-                self.log.append(Event::Out(Outbound::CancelSubmitted {
+                self.record(Outbound::CancelSubmitted {
                     caused_by,
                     order: id,
-                }))?;
+                })?;
             }
         }
         self.cancels = cancels;
@@ -590,7 +665,7 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             return self.reject(intent, RiskReason::VenueUnreachable, caused_by);
         }
         self.orders.insert(order)?;
-        self.log.append(Event::Out(Outbound::OrderSubmitted {
+        self.record(Outbound::OrderSubmitted {
             caused_by,
             order: id,
             strategy: approved.strategy,
@@ -599,7 +674,7 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             qty: approved.qty,
             kind: approved.kind,
             reduce_only: approved.reduce_only,
-        }))?;
+        })?;
         Ok(())
     }
 
@@ -609,14 +684,14 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         reason: RiskReason,
         caused_by: Seq,
     ) -> Result<(), EngineError> {
-        self.log.append(Event::Out(Outbound::IntentRejected {
+        self.record(Outbound::IntentRejected {
             caused_by,
             strategy: intent.strategy,
             instrument: intent.instrument,
             side: intent.side,
             qty: intent.qty,
             reason,
-        }))?;
+        })?;
         // Tell the strategy. A strategy that tracks what it has in flight is
         // wrong from the first refusal onwards otherwise: no order exists, so
         // no fill and no terminal transition will ever release the quantity.
@@ -641,12 +716,12 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         let mut timers = std::mem::take(&mut self.timers);
         let mut outcome = Ok(());
         for request in timers.drain(..) {
-            if let Err(e) = self.log.append(Event::Out(Outbound::TimerRequested {
+            if let Err(e) = self.record(Outbound::TimerRequested {
                 caused_by,
                 strategy: request.strategy,
                 token: request.token,
                 at: request.at,
-            })) {
+            }) {
                 outcome = Err(EngineError::Log(e));
                 break;
             }

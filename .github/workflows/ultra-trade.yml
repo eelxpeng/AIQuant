@@ -154,6 +154,24 @@ jobs:
           cargo run -p journal --locked --offline -- "$torn" --fills \
             | grep -q "cut off here"
 
+          # The whole crash cycle, which is the only check that a resumed
+          # session comes back holding what it held. Tear the tail off the
+          # paper recording, point paper at the same session root, and it must
+          # continue the chain rather than refuse or start fresh.
+          truncate -s $(( $(stat -c%s "${paper_log%.log}.0.log") - 45 )) \
+            "${paper_log%.log}.0.log"
+          cargo run -p paper --locked --offline -- "$conf" "$md" "$paper_log" \
+            < /dev/null > "${RUNNER_TEMP:-/tmp}/resumed.txt"
+          grep -q "RESUMED" "${RUNNER_TEMP:-/tmp}/resumed.txt"
+          # A crash is an incident: it comes back halted, and stays that way
+          # until an operator says otherwise (contract D-2).
+          grep -q "HALTED" "${RUNNER_TEMP:-/tmp}/resumed.txt"
+          grep -q "final state     Halted" "${RUNNER_TEMP:-/tmp}/resumed.txt"
+          test -f "${paper_log%.log}.1.log"
+          # And the two segments read back as one session.
+          cargo run -p journal --locked --offline -- "$paper_log" \
+            | grep -q "2 segments"
+
   repeatability:
     name: allocation counter, 20 runs
     runs-on: ubuntu-latest
