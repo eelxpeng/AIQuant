@@ -240,9 +240,7 @@ impl Strategy for Quoter {
                 if instrument != self.instrument {
                     return;
                 }
-                self.position = self
-                    .position
-                    .saturating_add(side.sign() * qty.to_scaled());
+                self.position = self.position.saturating_add(side.sign() * qty.to_scaled());
             }
 
             // Gone, however it went. Free the side so the next quote reposts.
