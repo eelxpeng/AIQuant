@@ -190,9 +190,10 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `adapters/live` | live feed, line protocol, **the one real clock** | venues, orders |
 | `report` | log → PnL, drawdown, refusals | engine internals |
 | `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
+| `recovery` | bringing a crashed session back, and refusing to when it does not add up | feeds, clocks, which venue is bound |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**21,400 lines, 396 tests, zero third-party dependencies** in the trading path.
+**22,000 lines, 407 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -272,6 +273,48 @@ instruments disagree with its own.
 
 ---
 
+## 6b. Coming back from a crash
+
+Point `paper` at a session that already exists and it does not refuse and does
+not start fresh — it **continues** that session.
+
+```mermaid
+graph TD
+    C["a session dies<br/>tail torn off session.0.log"] --> R["restart, same session root"]
+    R --> RP["replay session.0.log<br/><i>market, commands, timers</i>"]
+    RP --> V["the simulated venue<br/>regenerates its own reports"]
+    V --> CMP{"does the replay agree<br/>with the recorded fills?"}
+    CMP -->|yes| H["<b>Halted</b><br/>holding what it held"]
+    CMP -->|no| X["<b>refuse to start</b><br/>neither side is trusted"]
+    H -->|operator types resume| RUN["Running, into session.1.log"]
+```
+
+Four things in that picture are the whole design:
+
+1. **State comes back by replay, not by installation.** The engine runs its own
+   recording through the same path that produced the state the first time. A
+   second way to reach a position is a second answer waiting to disagree.
+2. **The venue's recorded reports are not replayed.** A simulated venue
+   regenerates them from the same market and the same orders, which is what
+   rebuilds *the venue* — its book, its resting orders — instead of leaving it
+   empty while the engine believes it is trading.
+3. **That makes reconciliation a real check.** The replay and the recording are
+   two independent accounts: one derived by trading forward through the venue,
+   one by walking the recorded fills. They are compared per instrument, and a
+   disagreement stops the session rather than picking a side.
+4. **It comes back halted.** A crash is an incident; leaving a halt is an
+   explicit operator decision and never automatic (Constitution V).
+
+Order ids continue rather than restart, because the replay drives the same
+counter that issued them.
+
+**What this does not cover: a real venue.** Its reports cannot be regenerated,
+so recovery against one has to ask it what it holds and cancel by its list
+(contract D-3). None of that is built, and the comparison above is sound
+precisely because a *simulated* venue is deterministic.
+
+---
+
 ## 7. Verified end to end
 
 A live paper session against Kraken — **two instruments at once** — and then a
@@ -305,9 +348,9 @@ So the map is not mistaken for the territory:
 | Missing | Consequence |
 |---|---|
 | `bin/live` and a real venue adapter | nothing can lose money yet, by construction |
-| Crash recovery, the *policy* | the contract is written (`adr/1-crash-recovery-contract.md`) and its D-1 — the segment chain — is built. What is missing is D-2 to D-4: a restart does not yet rebuild its position, start halted, or reconcile against the venue. No binary opens a second segment yet. |
+| Crash recovery against a **real** venue | D-1, D-2 and a simulated-venue form of D-4 are built (§6b). D-3 — ask the venue for its open orders and cancel by *its* list — needs a venue that can be asked, and no real venue exists. A `Recovering` engine state (D-6) would also be a wire-format change, so it waits for that work. |
 | `client` | operator commands come from stdin; there is no separate UI process |
-| Latency budget | never measured. The feed is ~6s behind the market, so it cannot be measured with this bridge. |
+| Latency budget | no budget is declared. `cargo bench -p engine` now measures the hot path (~88 ns/event, one instrument, one strategy) so changes can be compared, but nothing says what the number is *allowed* to be. End-to-end latency still cannot be measured at all: the REST bridge is ~6s behind the market. |
 | Duplicate market events | out-of-order events are refused; duplicates need a venue sequence number no feed has given us yet |
 | Per-strategy config beyond the crossover | one strategy kind exists, so `strategy crossover` is the only form the config accepts |
 | A session start time in the log header | the header has the field; both writers leave it zero, because at that moment no exchange clock has been observed and a receive time is not one. `journal` derives the span from the records instead. |

@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+recovery = { path = "../../crates/recovery" }
 types = { path = "../../crates/types" }
 config = { path = "../../crates/config" }
 event = { path = "../../crates/event" }

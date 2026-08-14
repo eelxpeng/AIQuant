@@ -51,6 +51,7 @@
 
 use crate::codec::{LogHeader, RECORD_LEN, encode_record};
 use crate::file::LogFileError;
+use crate::segments::Segments;
 use crate::{Event, EventLog, LogError, Record, Seq};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -235,6 +236,34 @@ impl BackgroundLog {
             Err(e) => return Err(LogFileError::Io(e)),
         };
         BackgroundLog::spawn(file, header, capacity)
+    }
+
+    /// Continues a crashed session, recording into its next segment.
+    ///
+    /// The damaged segment is read to find where the sequence got to, and
+    /// never written (`Segments`, contract D-1). The header comes from the
+    /// session rather than being rebuilt, so `InstrumentId(0)` cannot mean a
+    /// different contract either side of a restart.
+    pub fn resume(root: &Path, capacity: usize) -> Result<BackgroundLog, LogFileError> {
+        let (records, _) = Segments::read_all(root)?;
+        let next = records.last().map(|r| r.seq.raw() + 1).unwrap_or(0);
+        let header = Segments::header(root)?;
+
+        let segment = Segments::next_path(root)?;
+        let file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&segment)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(LogFileError::AlreadyExists);
+            }
+            Err(e) => return Err(LogFileError::Io(e)),
+        };
+        let mut log = BackgroundLog::spawn(file, header, capacity)?;
+        log.next = next;
+        Ok(log)
     }
 
     /// Records to any sink.

@@ -134,6 +134,22 @@ impl Segments {
         LogWriter::create_at(Segments::create_path(root)?, header, Seq::FIRST)
     }
 
+    /// Where the next segment of an existing session goes.
+    ///
+    /// Refuses a session that does not exist rather than inventing segment
+    /// zero: a resume that quietly becomes a fresh session loses the position
+    /// the operator was trying to recover.
+    pub fn next_path(root: &Path) -> Result<PathBuf, LogFileError> {
+        let paths = Segments::paths(root)?;
+        if paths.is_empty() {
+            return Err(LogFileError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no session at {} to continue", root.display()),
+            )));
+        }
+        Ok(Segments::path(root, paths.len() as u32))
+    }
+
     /// Opens the next segment of an existing session, continuing its sequence.
     ///
     /// The damaged segment is read, never written: whatever survived in it
@@ -142,24 +158,14 @@ impl Segments {
     /// a record that is not durable never happened, and leaving a hole for it
     /// would put a gap in the log's only ordering key.
     pub fn resume(root: &Path) -> Result<LogWriter, LogFileError> {
-        let paths = Segments::paths(root)?;
-        let last_index = match paths.len() {
-            0 => {
-                return Err(LogFileError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("no session at {} to resume", root.display()),
-                )));
-            }
-            n => (n - 1) as u32,
-        };
-
+        let segment = Segments::next_path(root)?;
         let (records, _) = Segments::read_all(root)?;
         let next = records
             .last()
             .map(|r| Seq::new(r.seq.raw() + 1))
             .unwrap_or(Seq::FIRST);
         let header = Segments::header(root)?;
-        LogWriter::create_at(Segments::path(root, last_index + 1), header, next)
+        LogWriter::create_at(segment, header, next)
     }
 
     /// Reads every segment as one record stream.

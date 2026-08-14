@@ -9,6 +9,7 @@ members = [
     "crates/engine",
     "crates/simkit",
     "crates/report",
+    "crates/recovery",
     "crates/config",
     "crates/adapters/sim",
     "crates/adapters/historical",

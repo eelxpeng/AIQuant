@@ -260,6 +260,7 @@ dependencies = [
  "event",
  "live_feed",
  "marketdata",
+ "recovery",
  "risk",
  "sim_venue",
  "strategy",
@@ -378,6 +379,23 @@ dependencies = [
  "marketdata",
  "risk",
  "sim_venue",
+ "strategy",
+ "types",
+]
+
+[[package]]
+name = "recovery"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "event",
+ "historical",
+ "marketdata",
+ "oms",
+ "report",
+ "risk",
+ "sim_venue",
+ "simkit",
  "strategy",
  "types",
 ]

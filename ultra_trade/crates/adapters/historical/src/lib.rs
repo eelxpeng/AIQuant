@@ -63,6 +63,18 @@ pub enum Replaying {
     /// Reproduces the original session. Bind a venue that says nothing back, or
     /// every fill will arrive twice.
     EveryInput,
+    /// Everything the outside world said, except the venue — a **recovery**.
+    ///
+    /// Market data, operator commands and timer firings are replayed; the
+    /// venue's own reports are not, because a *simulated* venue regenerates
+    /// them from the same market and the same orders. That is what rebuilds
+    /// the venue's state — its book and its resting orders — rather than
+    /// leaving it empty while the engine believes it is trading.
+    ///
+    /// Only sound against a deterministic venue. Bind a real one and its
+    /// reports are gone, which is why recovery against a real venue asks the
+    /// venue what it holds instead (contract D-3).
+    WithoutVenueReports,
 }
 
 impl Replaying {
@@ -71,6 +83,9 @@ impl Replaying {
         match self {
             Replaying::EveryInput => true,
             Replaying::MarketDataOnly => matches!(inbound, Inbound::Market(_)),
+            Replaying::WithoutVenueReports => {
+                !matches!(inbound, Inbound::Venue(_) | Inbound::VenuePosition(_))
+            }
         }
     }
 }
