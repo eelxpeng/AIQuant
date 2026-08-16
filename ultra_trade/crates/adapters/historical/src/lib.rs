@@ -150,6 +150,24 @@ impl HistoricalFeed {
         Ok(Self::from_parts(header, records, mode, recovery))
     }
 
+    /// Builds a feed from records already in hand.
+    ///
+    /// For a caller that has read the chain for its own reasons, or that is
+    /// deliberately replaying only part of it — a sweep measuring out of
+    /// sample hands over the second half.
+    pub fn from_records(
+        header: LogHeader,
+        records: Vec<Record>,
+        mode: Replaying,
+    ) -> HistoricalFeed {
+        let recovery = Recovery {
+            records: records.len() as u64,
+            discarded_bytes: 0,
+            stopped: None,
+        };
+        Self::from_parts(header, records, mode, recovery)
+    }
+
     fn from_parts(
         header: LogHeader,
         records: Vec<Record>,

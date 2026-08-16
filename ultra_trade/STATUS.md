@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — it is the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **24,300 lines, 440 tests, 14 crates, 4 binaries, zero third-party
+Today: **25,400 lines, 450 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path.
 
 ---
@@ -30,14 +30,15 @@ exist.
       profit-and-loss: realized plus the open position marked to market, with
       the rule and the timestamp stated, and a refusal rather than a zero when
       a position cannot be valued.
-- [ ] **7 · Research throughput.** ← **you are here.** Run many configurations over one recording
-      and compare them without hand-driving each one.
-- [ ] **8 · A real venue, read-only.** Real market data over a real connection,
+- [x] **7 · Research throughput.** Run a grid of configurations over one
+      recording in one command, ranked, and measured out of sample so the
+      in-sample winner can be caught being luck.
+- [ ] **8 · A real venue, read-only.** ← **you are here.** Real market data over a real connection,
       still trading against the simulator.
 - [ ] **9 · Live.** Real orders, real money. Everything above has to be true
       first, and rung 8 has to have run for a long time without surprises.
 
-Rungs 1–6 took PRs #7 to #28. Rung 9 is deliberately far away.
+Rungs 1–7 took PRs #7 to #29. Rung 9 is deliberately far away.
 
 ---
 
@@ -72,6 +73,8 @@ Rungs 1–6 took PRs #7 to #28. Rung 9 is deliberately far away.
 - [x] `journal` — read a recording back: decisions, fills, PnL curve (#23)
 - [x] One session config drives all of them; multi-instrument (#23)
 - [x] `cargo bench -p engine` — the hot path, ~88 ns/event (#25)
+- [x] `sweep` — a grid of configs over one recording, in and out of sample (#29)
+- [x] `harness` — one definition of what a backtest is, shared by both (#29)
 
 ### Fault tolerance
 
@@ -114,12 +117,19 @@ Ordered by what I would do next, not by size.
       and a crossover comparable on more than one number. These belong with
       rung 7: they exist to rank runs against each other.
 
-### Research throughput — rung 7, and what I would do next
+### Research throughput
 
-- [ ] Run N configs over one recording in one command, and print a table.
-      Today each run is hand-driven and compared by eye.
-- [ ] Walk-forward splits, so a parameter is chosen on one window and measured
-      on another.
+- [x] `sweep` — a grid of variants over one recording, ranked by what each was
+      worth, in one command (#29)
+- [x] `--split` measures every variant out of sample and says when the ranking
+      rearranged, which is what overfitting looks like (#29)
+- [x] A sweep with no split nags about it (#29)
+- [ ] **Rolling walk-forward** — many consecutive train/test windows rather
+      than one split. One split is one experiment; a parameter that survives
+      six consecutive windows is a different quality of evidence.
+- [ ] Sharpe, hit rate, average edge per fill. The table ranks on total, which
+      says nothing about how much risk bought it — `total` and `drawdown` side
+      by side is the poor version of that.
 
 ### Towards a real venue — rungs 8 and 9
 

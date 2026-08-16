@@ -15,6 +15,7 @@ dependencies = [
  "config",
  "engine",
  "event",
+ "harness",
  "historical",
  "marketdata",
  "report",
@@ -140,6 +141,22 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
+name = "harness"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "engine",
+ "event",
+ "historical",
+ "marketdata",
+ "oms",
+ "report",
+ "risk",
+ "sim_venue",
+ "types",
+]
 
 [[package]]
 name = "hashbrown"
@@ -530,6 +547,18 @@ dependencies = [
  "marketdata",
  "oms",
  "trybuild",
+ "types",
+]
+
+[[package]]
+name = "sweep"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "event",
+ "harness",
+ "marketdata",
+ "report",
  "types",
 ]
 

@@ -354,3 +354,87 @@ strategy quote Y half-spread 0.1 size 1 max-inventory 5
     ));
     assert!(matches!(c.strategies[1].kind, StrategyKind::Quote { .. }));
 }
+
+// ---- overriding one setting, for a sweep ---------------------------------
+
+fn quoter() -> config::StrategyConfig {
+    SessionConfig::parse(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy quote X half-spread 0.5 size 2 max-inventory 10
+",
+    )
+    .expect("parse")
+    .strategies
+    .remove(0)
+}
+
+fn crossover() -> config::StrategyConfig {
+    SessionConfig::parse(
+        "\
+instrument X tick 0.01 lot 1 min 1
+limits X max-position 10 max-exposure 1000 max-order-notional 100 max-orders 60 rate-window 60s max-quote-age 30s
+strategy crossover X window 20 size 2
+",
+    )
+    .expect("parse")
+    .strategies
+    .remove(0)
+}
+
+#[test]
+fn overriding_a_setting_changes_only_that_setting() {
+    let changed = quoter().with("half-spread", "0.25").expect("override");
+    assert_eq!(
+        changed.kind,
+        StrategyKind::Quote {
+            half_spread: Px::from_scaled(250_000_000),
+            size: Qty::from_scaled(2_000_000_000),
+            reprice: Px::from_scaled(500_000_000), // the original default
+            max_inventory: Qty::from_scaled(10_000_000_000),
+        }
+    );
+    assert_eq!(changed.symbol, "X");
+    assert_eq!(changed.instrument, InstrumentId::new(0));
+}
+
+#[test]
+fn a_setting_the_strategy_does_not_take_is_refused() {
+    // A sweep that silently ignored this would print a grid of runs that were
+    // all secretly identical and rank them against each other.
+    let e = quoter()
+        .with("window", "10")
+        .expect_err("quote has no window");
+    assert!(e.message.contains("not a setting quote takes"), "{e}");
+
+    let e = crossover()
+        .with("half-spread", "1")
+        .expect_err("crossover has no half-spread");
+    assert!(e.message.contains("not a setting crossover takes"), "{e}");
+}
+
+#[test]
+fn a_value_that_is_not_a_number_is_refused() {
+    let e = quoter().with("size", "wide").expect_err("not a number");
+    assert!(e.message.contains("size"), "{e}");
+
+    let e = crossover().with("window", "20.5").expect_err("not whole");
+    assert!(e.message.contains("whole number"), "{e}");
+}
+
+#[test]
+fn every_setting_of_both_kinds_can_be_overridden() {
+    // The sweep's usefulness is bounded by this list, so it is checked rather
+    // than assumed.
+    for key in ["window", "size", "bars"] {
+        crossover()
+            .with(key, "3")
+            .unwrap_or_else(|e| panic!("crossover.{key}: {e}"));
+    }
+    for key in ["half-spread", "size", "reprice", "max-inventory"] {
+        quoter()
+            .with(key, "3")
+            .unwrap_or_else(|e| panic!("quote.{key}: {e}"));
+    }
+}
