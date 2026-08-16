@@ -12,8 +12,9 @@
 #![deny(missing_docs)]
 
 use event::{EngineState, Event, Inbound, Outbound, Record, RiskReason, VenueKind};
+use marketdata::{Books, MarkRule};
 use oms::{PositionError, Positions};
-use types::{InstrumentId, Notional, OrderId, Qty, Side};
+use types::{ExchangeTime, InstrumentId, Notional, OrderId, Px, Qty, Side};
 
 /// What a finished session did.
 #[derive(Debug, Clone)]
@@ -38,11 +39,17 @@ pub struct SessionReport {
     pub realized: Notional,
     /// Fees paid.
     pub fees: Notional,
-    /// The deepest fall from a peak in cumulative realized profit.
+    /// The deepest fall from a peak, marked to market.
     ///
-    /// Measured on realized profit alone, because that is what the log
-    /// establishes without choosing a mark. A mark-to-market drawdown needs a
-    /// mark rule and a valuation timestamp, which is a different report (#1).
+    /// Sampled on `realized + unrealized` at every event that can move either:
+    /// a fill, and a market event that moves the mark. Realized-only was the
+    /// earlier measure and it understated every drawdown a session rode out in
+    /// an open position — which is most of them, because a strategy that is
+    /// down usually still holds the thing it is down on.
+    ///
+    /// Sampling begins once a mark exists. Before that the position cannot be
+    /// valued, and a fabricated early point would put a cliff in the curve at
+    /// the moment the first quote arrived.
     pub max_drawdown: Notional,
     /// Where the engine ended up.
     pub final_state: EngineState,
@@ -54,6 +61,68 @@ pub struct SessionReport {
     pub rejections: Vec<(RiskReason, usize)>,
     /// Per-instrument accounting, re-derived from the fills in the log.
     pub positions: Positions,
+    /// What the open positions are worth.
+    pub valuation: Valuation,
+}
+
+/// A valuation price, and the moment it was observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    /// The price the position is valued at.
+    pub px: Px,
+    /// The exchange time of the event that produced it.
+    ///
+    /// A mark without an "as of" is not checkable, and a stale one looks
+    /// exactly like a fresh one until somebody asks.
+    pub at: ExchangeTime,
+}
+
+/// What the open positions are worth.
+///
+/// Realized profit alone is not a result. A session that closed out for a
+/// small gain and one sitting on a large loss can print the same realized
+/// number, and ranking two strategies on it gets the order wrong. Every
+/// session recorded so far has ended holding something.
+#[derive(Debug, Clone)]
+pub struct Valuation {
+    /// The rule the caller chose.
+    ///
+    /// Carried so a report can say which it used. Two rules give two different
+    /// answers over the same log, so the number means nothing without it.
+    pub rule: MarkRule,
+    /// The mark per instrument, in id order. `None` where the log never
+    /// established one.
+    pub marks: Vec<Option<Mark>>,
+    /// Profit on each instrument's open position, in id order.
+    ///
+    /// `None`, not zero, where there was no mark. Comparing two strategies is
+    /// the main thing anyone does with these, and that comparison is only
+    /// meaningful per instrument — a session total hides which one earned it.
+    pub unrealized_each: Vec<Option<Notional>>,
+    /// Profit on the open positions, over instruments that have a mark.
+    pub unrealized: Notional,
+    /// Realized plus unrealized, over instruments that have a mark.
+    pub total: Notional,
+    /// Instruments holding a position that could not be valued.
+    ///
+    /// Named rather than counted as zero. Zero is a number someone will add
+    /// up, and a missing mark is not worth nothing (Constitution V). An
+    /// instrument that is flat is not listed: it has nothing to value, and a
+    /// list that cries wolf is a list people stop reading.
+    pub unmarked: Vec<InstrumentId>,
+}
+
+impl Valuation {
+    /// Whether every position could be valued.
+    ///
+    /// `false` means [`total`] is missing something, and presenting it as the
+    /// session's result would overstate how much is known.
+    ///
+    /// [`total`]: Valuation::total
+    #[inline]
+    pub fn is_complete(&self) -> bool {
+        self.unmarked.is_empty()
+    }
 }
 
 /// Why a log could not be summarized.
@@ -81,6 +150,7 @@ impl From<PositionError> for ReportError {
 pub fn summarize(
     records: &[Record],
     instrument_count: usize,
+    rule: MarkRule,
 ) -> Result<SessionReport, ReportError> {
     let mut report = SessionReport {
         records: records.len(),
@@ -97,7 +167,20 @@ pub fn summarize(
         final_state: EngineState::Running,
         rejections: Vec::new(),
         positions: Positions::with_instruments(instrument_count, 64),
+        valuation: Valuation {
+            rule,
+            marks: vec![None; instrument_count],
+            unrealized_each: vec![None; instrument_count],
+            unrealized: Notional::ZERO,
+            total: Notional::ZERO,
+            unmarked: Vec::new(),
+        },
     };
+
+    // The book is rebuilt rather than tracked by hand, so "what is the mark"
+    // has one definition and the report cannot disagree with the session about
+    // it — including which events the book *refused* as out of order.
+    let mut books = Books::with_instruments(instrument_count);
 
     // Order ids are a dense run from a base, so remembering what each order
     // traded is a slice rather than a map — and it stays in log order.
@@ -137,6 +220,21 @@ pub fn summarize(
 
             Event::In(inbound) => {
                 report.inputs += 1;
+                if let Inbound::Market(market) = inbound {
+                    // The result is deliberately ignored: a refusal here is
+                    // the same refusal the session made, and `Books` counts it.
+                    let _ = books.apply(market);
+                    // A mark that moved changes what the open position is
+                    // worth, so the equity curve has a new point even though
+                    // nothing traded.
+                    sample(
+                        &mut report.max_drawdown,
+                        &mut peak,
+                        &books,
+                        &report.positions,
+                        rule,
+                    );
+                }
                 let Inbound::Venue(venue) = inbound else {
                     continue;
                 };
@@ -162,17 +260,13 @@ pub fn summarize(
                         .saturating_add(qty.to_scaled()),
                 );
 
-                // Drawdown is sampled at each fill, which is every instant the
-                // realized number can change.
-                let realized = total_realized(&report.positions);
-                if realized.to_scaled() > peak.to_scaled() {
-                    peak = realized;
-                }
-                let fall =
-                    Notional::from_scaled(peak.to_scaled().saturating_sub(realized.to_scaled()));
-                if fall.to_scaled() > report.max_drawdown.to_scaled() {
-                    report.max_drawdown = fall;
-                }
+                sample(
+                    &mut report.max_drawdown,
+                    &mut peak,
+                    &books,
+                    &report.positions,
+                    rule,
+                );
             }
         }
     }
@@ -182,7 +276,85 @@ pub fn summarize(
         .positions
         .iter()
         .fold(Notional::ZERO, |acc, p| acc + p.fees());
+
+    // Value what is still open. An instrument with no usable mark is named
+    // rather than counted as zero, and only if it is actually holding
+    // something — a flat instrument has nothing to value and listing it would
+    // train people to ignore the list.
+    for index in 0..instrument_count {
+        let instrument = InstrumentId::new(index as u32);
+        let Some(position) = report.positions.get(instrument) else {
+            continue;
+        };
+        let mark = books.mark(instrument, rule).map(|px| Mark {
+            px,
+            // The mark and its timestamp come from the same event, so they
+            // cannot describe different moments.
+            at: mark_time(&books, instrument, rule),
+        });
+        report.valuation.marks[index] = mark;
+
+        match mark {
+            Some(mark) => {
+                let unrealized = position.unrealized(mark.px)?;
+                report.valuation.unrealized_each[index] = Some(unrealized);
+                report.valuation.unrealized = report.valuation.unrealized + unrealized;
+            }
+            None if !position.is_flat() => report.valuation.unmarked.push(instrument),
+            None => {}
+        }
+    }
+    report.valuation.total = report.realized + report.valuation.unrealized;
     Ok(report)
+}
+
+/// When the event behind a mark happened.
+///
+/// Split out so the price and its timestamp are read from the same source
+/// under the same rule; deriving one from the top of book and the other from
+/// the last trade would produce a mark that describes two different moments.
+fn mark_time(books: &Books, instrument: InstrumentId, rule: MarkRule) -> ExchangeTime {
+    match rule {
+        MarkRule::Mid(_) => books
+            .top(instrument)
+            .map(|t| t.exchange_time)
+            .unwrap_or(ExchangeTime::MIN),
+        MarkRule::LastTrade => books
+            .last_trade(instrument)
+            .map(|t| t.exchange_time)
+            .unwrap_or(ExchangeTime::MIN),
+    }
+}
+
+/// Adds one point to the equity curve and widens the drawdown if it fell.
+///
+/// Marked to market, so a position that moves against the session counts even
+/// though nothing traded. An instrument with no mark yet contributes its
+/// realized profit only — the alternative is to skip the whole sample, which
+/// would hide the drawdown on every *other* instrument.
+fn sample(
+    deepest: &mut Notional,
+    peak: &mut Notional,
+    books: &Books,
+    positions: &Positions,
+    rule: MarkRule,
+) {
+    let mut equity = Notional::ZERO;
+    for position in positions.iter() {
+        equity = equity + position.realized();
+        if let Some(mark) = books.mark(position.instrument(), rule)
+            && let Ok(unrealized) = position.unrealized(mark)
+        {
+            equity = equity + unrealized;
+        }
+    }
+    if equity.to_scaled() > peak.to_scaled() {
+        *peak = equity;
+    }
+    let fall = Notional::from_scaled(peak.to_scaled().saturating_sub(equity.to_scaled()));
+    if fall.to_scaled() > deepest.to_scaled() {
+        *deepest = fall;
+    }
 }
 
 fn total_realized(positions: &Positions) -> Notional {
@@ -207,6 +379,9 @@ mod tests {
     use types::{ExchangeTime, Px, StrategyId, Timestamp};
 
     const SCALE: i64 = types::SCALE;
+    /// These tests are about counting and accounting, not valuation; the rule
+    /// has to be *a* rule and this is the one the engine uses.
+    const MID: MarkRule = MarkRule::Mid(types::RoundDir::Down);
     const I: InstrumentId = InstrumentId::new(0);
 
     fn px(whole: i64) -> Px {
@@ -267,7 +442,7 @@ mod tests {
 
     #[test]
     fn an_empty_log_summarizes_to_nothing() {
-        let r = summarize(&[], 1).expect("summary");
+        let r = summarize(&[], 1, MID).expect("summary");
         assert_eq!(r.records, 0);
         assert_eq!(r.orders_submitted, 0);
         assert_eq!(r.realized, Notional::ZERO);
@@ -282,7 +457,7 @@ mod tests {
             submitted(2, 1, Side::Sell),
             filled(3, 1, 110, 10),
         ];
-        let r = summarize(&log, 1).expect("summary");
+        let r = summarize(&log, 1, MID).expect("summary");
         assert_eq!(r.orders_submitted, 2);
         assert_eq!(r.fills, 2);
         assert_eq!(r.filled_qty, qty(20));
@@ -309,7 +484,7 @@ mod tests {
             submitted(10, 5, Side::Sell),
             filled(11, 5, 105, 10),
         ];
-        let r = summarize(&log, 1).expect("summary");
+        let r = summarize(&log, 1, MID).expect("summary");
         assert_eq!(r.realized, money(-150));
         assert_eq!(r.max_drawdown, money(300));
     }
@@ -334,7 +509,7 @@ mod tests {
             reject(1, RiskReason::StaleMarketData),
             reject(2, RiskReason::PositionLimit),
         ];
-        let r = summarize(&log, 1).expect("summary");
+        let r = summarize(&log, 1, MID).expect("summary");
         assert_eq!(r.intents_rejected, 3);
         assert_eq!(
             r.rejections,
@@ -349,7 +524,7 @@ mod tests {
     fn a_fill_for_an_order_the_log_never_recorded_is_refused_not_guessed() {
         let log = [submitted(0, 0, Side::Buy), filled(1, 99, 100, 1)];
         assert_eq!(
-            summarize(&log, 1).err(),
+            summarize(&log, 1, MID).err(),
             Some(ReportError::OrphanFill(OrderId::new(99)))
         );
     }
@@ -377,7 +552,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            summarize(&log, 1).expect("summary").final_state,
+            summarize(&log, 1, MID).expect("summary").final_state,
             EngineState::Killed
         );
     }

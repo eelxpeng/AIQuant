@@ -180,6 +180,12 @@ jobs:
           cargo run -p journal --locked --offline -- "$paper_log" \
             | grep -q "cancel"
 
+          # Every session ends holding something, so a report that stops at
+          # realized is not a result. Check the valuation reaches the surface
+          # and says what it marked at.
+          cargo run -p journal --locked --offline -- "$paper_log" | grep -q "TOTAL"
+          cargo run -p journal --locked --offline -- "$paper_log" | grep -q "marked at"
+
   repeatability:
     name: allocation counter, 20 runs
     runs-on: ubuntu-latest

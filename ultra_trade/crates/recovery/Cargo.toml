@@ -12,9 +12,9 @@ oms = { path = "../oms" }
 engine = { path = "../engine" }
 historical = { path = "../adapters/historical" }
 report = { path = "../report" }
+marketdata = { path = "../marketdata" }
 
 [dev-dependencies]
-marketdata = { path = "../marketdata" }
 risk = { path = "../risk" }
 strategy = { path = "../strategy" }
 sim_venue = { path = "../adapters/sim" }

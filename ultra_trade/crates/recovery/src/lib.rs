@@ -43,9 +43,10 @@ use core::fmt;
 
 use engine::{Engine, EngineError};
 use event::{EventLog, Inbound, LogFileError, Record, Recovery, Segments, Seq};
+use marketdata::MarkRule;
 use oms::{Positions, VenueAdapter};
 use report::{ReportError, summarize};
-use types::{InstrumentId, Qty};
+use types::{InstrumentId, Qty, RoundDir};
 
 /// What a recovery concluded.
 #[derive(Debug, Clone)]
@@ -174,7 +175,9 @@ where
     // account the replay will be checked against, and it is derived through
     // `oms`'s accounting rather than a second implementation of it.
     let instruments = engine.positions().len();
-    let from_log = summarize(records, instruments)?.positions;
+    // The mark rule is immaterial here: recovery compares *positions*, and a
+    // valuation would be an unused number that could still fail to compute.
+    let from_log = summarize(records, instruments, MarkRule::Mid(RoundDir::Down))?.positions;
 
     engine.begin_replay();
     let outcome = replay(engine, records);

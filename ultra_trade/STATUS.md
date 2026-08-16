@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — it is the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **23,900 lines, 426 tests, 14 crates, 4 binaries, zero third-party
+Today: **24,300 lines, 440 tests, 14 crates, 4 binaries, zero third-party
 dependencies** in the trading path.
 
 ---
@@ -26,17 +26,18 @@ exist.
       halt it, and a simulated venue so nothing can lose money.
 - [x] **5 · A session survives a crash.** Restart, rebuild what was held, come
       back halted, and wait for a human.
-- [ ] **6 · Trustworthy results.** ← **you are here.** The numbers a session
-      reports are not yet complete enough to make a decision on. See
-      *Reporting* below.
-- [ ] **7 · Research throughput.** Run many configurations over one recording
+- [x] **6 · Trustworthy results.** A session's headline is now a complete
+      profit-and-loss: realized plus the open position marked to market, with
+      the rule and the timestamp stated, and a refusal rather than a zero when
+      a position cannot be valued.
+- [ ] **7 · Research throughput.** ← **you are here.** Run many configurations over one recording
       and compare them without hand-driving each one.
 - [ ] **8 · A real venue, read-only.** Real market data over a real connection,
       still trading against the simulator.
 - [ ] **9 · Live.** Real orders, real money. Everything above has to be true
       first, and rung 8 has to have run for a long time without surprises.
 
-Rungs 1–5 took PRs #7 to #26. Rung 9 is deliberately far away.
+Rungs 1–6 took PRs #7 to #28. Rung 9 is deliberately far away.
 
 ---
 
@@ -100,19 +101,20 @@ Rungs 1–5 took PRs #7 to #26. Rung 9 is deliberately far away.
 
 Ordered by what I would do next, not by size.
 
-### Reporting — the reason rung 6 is not ticked
+### Reporting
 
-- [ ] **Mark-to-market.** Every number this system reports is *realized only*.
-      Every session so far ended holding a position, and the report says
-      nothing about what it is worth. `Position::unrealized(mark)` exists and
-      **is called from nowhere**. Until this lands, a session's headline PnL is
-      not a result, and comparing two strategies on it can rank them wrongly.
-- [ ] **A valuation timestamp and mark rule in the report.** Needed before the
-      above means anything: "marked at what, and as of when".
+- [x] **Mark-to-market** — realized, unrealized, and a total, per instrument
+      and per session (#28)
+- [x] **The mark rule and its timestamp are reported**, because two rules give
+      two answers over one log (#28)
+- [x] **A position with no usable mark is named, not valued at zero** (#28)
+- [x] **Drawdown is marked to market** — it was realized-only, which missed
+      every fall a session rode out in an open position (#28)
 - [ ] Sharpe, hit rate, average edge per fill — the numbers that make a quoter
-      and a crossover comparable at all.
+      and a crossover comparable on more than one number. These belong with
+      rung 7: they exist to rank runs against each other.
 
-### Research throughput — rung 7
+### Research throughput — rung 7, and what I would do next
 
 - [ ] Run N configs over one recording in one command, and print a table.
       Today each run is hand-driven and compared by eye.

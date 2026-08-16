@@ -30,7 +30,15 @@ use config::{SessionConfig, StrategyConfig, StrategyKind};
 use engine::{Engine, EngineConfig, run};
 use event::{Outbound, Segments};
 use historical::{HistoricalFeed, Replaying};
-use marketdata::BarSpec;
+use marketdata::{BarSpec, MarkRule};
+
+/// How an open position is valued in the summary.
+///
+/// The same rule the engine's exposure check uses, so the report and the risk
+/// gate cannot disagree about what a position is worth. Rounding down means a
+/// long is never flattered; a short is valued the other way and the direction
+/// is stated rather than assumed.
+const MARK_RULE: MarkRule = MarkRule::Mid(types::RoundDir::Down);
 use report::summarize;
 use risk::{LimitBook, Limits};
 use sim_venue::{Fees, FillModel, SimVenue};
@@ -183,7 +191,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let summary = match summarize(engine.log().records(), instruments.len()) {
+    let summary = match summarize(engine.log().records(), instruments.len(), MARK_RULE) {
         Ok(summary) => summary,
         Err(e) => fail("cannot summarize the run", format!("{e:?}")),
     };
@@ -206,18 +214,52 @@ fn main() {
     for (reason, count) in &summary.rejections {
         println!("      {reason:?}: {count}");
     }
+    // Realized alone is not a result while anything is still open, so the
+    // valuation comes first and the realized/unrealized split sits under it.
+    let v = &summary.valuation;
     println!("  realized           {}", summary.realized);
+    println!("  unrealized         {}", v.unrealized);
     println!("  fees               {}", summary.fees);
+    println!("  TOTAL              {}", v.total);
+    println!("  marked at          {:?}", v.rule);
+    if !v.is_complete() {
+        // Said loudly, because the total above is missing something and a
+        // reader who skims will otherwise treat it as the whole answer.
+        println!("  !! INCOMPLETE      no mark for:");
+        for instrument in &v.unmarked {
+            println!("                       instrument {}", instrument.raw());
+        }
+        println!("                     the total above excludes those positions");
+    }
     println!("  max drawdown       {}", summary.max_drawdown);
     println!("  final state        {:?}", summary.final_state);
+    // Per instrument, because that is the only level at which two strategies
+    // can be compared: a session total hides which one earned it.
     for entry in &header.instruments {
         let position = engine.positions().get(entry.id).expect("configured");
-        println!(
-            "  {:<14}     realized {}  position {}",
-            entry.symbol_str().unwrap_or("?"),
-            position.realized(),
-            position.qty()
-        );
+        let index = entry.id.raw() as usize;
+        match summary
+            .valuation
+            .unrealized_each
+            .get(index)
+            .copied()
+            .flatten()
+        {
+            Some(unrealized) => println!(
+                "  {:<10} position {}  realized {}  unrealized {}  total {}",
+                entry.symbol_str().unwrap_or("?"),
+                position.qty(),
+                position.realized(),
+                unrealized,
+                position.realized() + unrealized,
+            ),
+            None => println!(
+                "  {:<10} position {}  realized {}  unrealized UNKNOWN (no mark)",
+                entry.symbol_str().unwrap_or("?"),
+                position.qty(),
+                position.realized(),
+            ),
+        }
     }
 
     // What the recording did, for comparison. The point of a backtest is the

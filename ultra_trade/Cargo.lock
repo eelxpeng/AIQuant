@@ -183,6 +183,7 @@ name = "journal"
 version = "0.1.0"
 dependencies = [
  "event",
+ "marketdata",
  "oms",
  "report",
  "types",
@@ -411,6 +412,7 @@ name = "report"
 version = "0.1.0"
 dependencies = [
  "event",
+ "marketdata",
  "oms",
  "types",
 ]

@@ -10,3 +10,4 @@ types = { path = "../../crates/types" }
 event = { path = "../../crates/event" }
 oms = { path = "../../crates/oms" }
 report = { path = "../../crates/report" }
+marketdata = { path = "../../crates/marketdata" }
