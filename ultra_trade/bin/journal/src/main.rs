@@ -34,8 +34,13 @@
 use std::io::{self, Write};
 
 use event::{Command, Event, Inbound, MarketKind, Outbound, Record, Segments, Seq, VenueKind};
+use marketdata::MarkRule;
 use oms::Positions;
 use report::summarize;
+
+/// How an open position is valued. The engine's own exposure rule, so a
+/// reading of a session cannot disagree with what the session believed.
+const MARK_RULE: MarkRule = MarkRule::Mid(types::RoundDir::Down);
 use types::{InstrumentId, Notional, OrderId, Px, Qty, Side};
 
 /// Which view was asked for.
@@ -258,7 +263,7 @@ fn run() -> Result<(), Fault> {
     // The summary comes from `report`, not from a second count here. Two
     // implementations of "how many orders was that" is how a report and a
     // session start disagreeing.
-    let summary = summarize(&records, header.instruments.len())
+    let summary = summarize(&records, header.instruments.len(), MARK_RULE)
         .map_err(|e| format!("this recording does not add up: {e:?}"))?;
     writeln!(out)?;
     writeln!(out, "in total")?;
@@ -271,21 +276,51 @@ fn run() -> Result<(), Fault> {
     for (reason, count) in &summary.rejections {
         writeln!(out, "    {reason:?}: {count}")?;
     }
+    let v = &summary.valuation;
     writeln!(out, "  realized           {}", summary.realized)?;
+    writeln!(out, "  unrealized         {}", v.unrealized)?;
     writeln!(out, "  fees               {}", summary.fees)?;
+    writeln!(out, "  TOTAL              {}", v.total)?;
+    writeln!(out, "  marked at          {:?}", v.rule)?;
+    if !v.is_complete() {
+        writeln!(out, "  !! INCOMPLETE      no mark for:")?;
+        for instrument in &v.unmarked {
+            writeln!(
+                out,
+                "                       {}",
+                symbol_of(&symbols, *instrument)
+            )?;
+        }
+        writeln!(
+            out,
+            "                     the total above excludes those positions"
+        )?;
+    }
     writeln!(out, "  max drawdown       {}", summary.max_drawdown)?;
     writeln!(out, "  final state        {:?}", summary.final_state)?;
     for position in summary.positions.iter() {
         if position.is_flat() && position.realized() == Notional::ZERO {
             continue;
         }
-        writeln!(
-            out,
-            "  {:<10} realized {}  position {}",
-            symbol_of(&symbols, position.instrument()),
-            position.realized(),
-            position.qty(),
-        )?;
+        let index = position.instrument().raw() as usize;
+        match v.unrealized_each.get(index).copied().flatten() {
+            Some(unrealized) => writeln!(
+                out,
+                "  {:<10} position {}  realized {}  unrealized {}  total {}",
+                symbol_of(&symbols, position.instrument()),
+                position.qty(),
+                position.realized(),
+                unrealized,
+                position.realized() + unrealized,
+            )?,
+            None => writeln!(
+                out,
+                "  {:<10} position {}  realized {}  unrealized UNKNOWN (no mark)",
+                symbol_of(&symbols, position.instrument()),
+                position.qty(),
+                position.realized(),
+            )?,
+        }
     }
     Ok(out.flush()?)
 }

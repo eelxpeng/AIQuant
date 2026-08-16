@@ -9,3 +9,4 @@ publish.workspace = true
 types = { path = "../types" }
 event = { path = "../event" }
 oms = { path = "../oms" }
+marketdata = { path = "../marketdata" }

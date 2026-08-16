@@ -188,12 +188,12 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `adapters/sim` | simulated venue and fill model | feeds |
 | `adapters/historical` | a recording, replayed as a feed | orders |
 | `adapters/live` | live feed, line protocol, **the one real clock** | venues, orders |
-| `report` | log → PnL, drawdown, refusals | engine internals |
+| `report` | log → PnL marked to market, drawdown, refusals | engine internals |
 | `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
 | `recovery` | bringing a crashed session back, and refusing to when it does not add up | feeds, clocks, which venue is bound |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**22,800 lines, 425 tests, zero third-party dependencies** in the trading path.
+**24,300 lines, 440 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -344,6 +344,42 @@ counter that issued them.
 so recovery against one has to ask it what it holds and cancel by its list
 (contract D-3). None of that is built, and the comparison above is sound
 precisely because a *simulated* venue is deterministic.
+
+---
+
+## 6c. What a session was actually worth
+
+A result is realized profit **plus what is still open**, and every session so
+far has ended holding something. Reporting realized alone is not conservative,
+it is just incomplete — it can be wrong in either direction.
+
+From the two-instrument Kraken session:
+
+```text
+  realized     -4.680      what the report used to say
+  unrealized   +2.850      the open position, marked
+  TOTAL        -1.830      the actual result
+  marked at    Mid(Down)   at the last quote of the session
+```
+
+The loss was overstated by more than half. The drawdown moved the other way —
+6.705 marked, against 5.130 realized-only — because the old measure only
+sampled at fills and so missed every fall a session rode out in an open
+position, which is most of them.
+
+Three rules make the number trustworthy rather than merely bigger:
+
+1. **The mark rule is the caller's and is printed.** `Mid(Down)` and
+   `LastTrade` give different answers over the same log, so a valuation
+   without its rule means nothing.
+2. **A mark carries the time it was observed.** "Marked at what, as of when" is
+   the difference between a number and a number somebody can check.
+3. **A position that cannot be valued is named, never counted as zero.** Zero
+   is a number people add up. The total then says it is incomplete.
+
+The book is rebuilt from the log to get the mark, so the report cannot disagree
+with the session about what a price was — including which events the book
+*refused* as out of order.
 
 ---
 
