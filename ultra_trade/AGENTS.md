@@ -19,7 +19,7 @@ This workspace is `ultra_trade` — the real-time quantitative trading system.
 - Read `docs/ARCHITECTURE.md` before changing a crate boundary or adding a seam.
 - Read `CONTEXT.md` before introducing a domain noun. If your term is not there, add it (with its `_Avoid_:` line) in the same PR.
 - Repo is `eelxpeng/AIQuant`; this project is its `ultra_trade/` subdirectory. `gh` targets that repo, and CI path filters and issue templates are relative to the repo root one level up.
-- Roadmap, phases, and status live in GitHub issues — master roadmap **#1** and its phase hubs. Never in a checked-in file; a workstream's status is its issue's open/closed state.
+- Read `STATUS.md` before picking up work: it is the checkable record of what is built and what is next. Update it in the same PR as the change it describes, citing the PR number. **Priority and scope splits still live in GitHub issues** — roadmap **#1** and its phase hubs — because those are the human's to set; `STATUS.md` records state, not plans.
 - Start implementation from a GitHub issue and its owning spec. If no spec owns the behavior, update the spec first or state the scope exception explicitly.
 - Writing or editing an issue (workstream, hub, roadmap): read `docs/agent-issues.md`; the form is `.github/ISSUE_TEMPLATE/workstream.md`. Never auto-create or auto-close a roadmap, workstream, or constitution issue — humans own scope splits and priority.
 

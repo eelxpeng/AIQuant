@@ -21,8 +21,11 @@ model that works in a notebook is a hypothesis, not a design.
 | `CONTEXT.md` | domain glossary — one meaning per term |
 | `specs/<issue>-<name>/` | per-feature behavior contracts |
 | `.agents/skills/` | agent procedures (`.claude` symlinks here) |
+| `STATUS.md` | what is built, what is not, and where the work is up to |
+| `docs/SYSTEM-MAP.md` | how the pieces fit together, with diagrams |
 
-Roadmap, phases, and status live in GitHub issues — never in a checked-in file.
+`STATUS.md` tracks what is built and what is next. Priority and scope splits
+live in GitHub issues — roadmap #1 and its phase hubs.
 
 This project sits inside the `ai_quant` monorepo. Issue templates and CI live at
 the repo root (`../.github/`), because GitHub only reads them from there.
@@ -33,8 +36,18 @@ would miss `AGENTS.md` entirely.
 
 ## Spec-driven development
 
-Every feature is specified, planned, and split into test-first tasks before code
-is written, using [GitHub Spec Kit](https://github.com/github/spec-kit).
+Intended for features large or risky enough to be worth designing on paper
+first, using [GitHub Spec Kit](https://github.com/github/spec-kit).
+
+**In practice most of the system so far was built without it.** The full
+specify/plan/tasks cycle was too slow for the core build, and those PRs say so
+in a "Design deltas" section instead. What survived from the discipline, and is
+not optional, is the part that catches mistakes: a **decision record before the
+code it decides** (`docs/adr/`), and a **failing test before the behaviour**.
+The crash-recovery contract was written that way and was worth every line.
+
+Use the full cycle when a change is hard to reverse. Say so in the PR when you
+skip it.
 
 ```bash
 uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
