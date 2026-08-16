@@ -1,5 +1,5 @@
 error[E0616]: field `intents` of struct `strategy::Context` is private
-  --> tests/compile-fail/context_has_no_public_state.rs:21:17
+  --> tests/compile-fail/context_has_no_public_state.rs:23:17
    |
-21 |     let _ = ctx.intents;
+23 |     let _ = ctx.intents;
    |                 ^^^^^^^ private field

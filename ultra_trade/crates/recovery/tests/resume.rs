@@ -130,6 +130,29 @@ fn build<L: event::EventLog>(log: L) -> Engine<SimVenue, L> {
     engine
 }
 
+/// A fresh engine running the quoter, which is the strategy that leaves
+/// orders resting for a crash to interrupt.
+fn quoting<L: EventLog>(log: L) -> Engine<SimVenue, L> {
+    let config = EngineConfig::new(
+        vec![instrument()],
+        limits(),
+        OrderId::new(0),
+        Timestamp::from_nanos(0),
+    );
+    let mut engine = Engine::new(config, sim(), log);
+    engine
+        .add_strategy(Box::new(strategy::Quoter::new(
+            StrategyId::new(0),
+            I,
+            Px::from_scaled(SCALE / 2),
+            qty(1),
+            Px::from_scaled(SCALE / 4),
+            qty(50),
+        )))
+        .expect("strategy");
+    engine
+}
+
 /// The market the session trades, chosen to make the crossover cross.
 fn market() -> Vec<Inbound> {
     let mut events = Vec::new();
@@ -406,5 +429,63 @@ fn a_replay_that_fails_does_not_leave_the_engine_silently_not_logging() {
     assert!(
         engine.log().len() > before,
         "a recovered session must record what it does next"
+    );
+}
+
+#[test]
+fn recovery_pulls_the_orders_the_session_had_resting() {
+    // Reconstructing the venue brings resting orders back live. Left alone
+    // they keep filling while the session is halted, so the position moves and
+    // nobody decided that it should. The contract's answer is to cancel and
+    // wear the lost queue position (D-3).
+    let temp = TempSession::new("cancel-resting");
+
+    // A quoter, because it is the strategy that leaves anything resting at all.
+    // The saw-tooth ends on a move, which makes the quoter cancel and leaves
+    // it flat-footed. A quiet tail lets it post and settle, which is the state
+    // a crash actually interrupts.
+    let mut events = market();
+    for n in 0..6i64 {
+        let at = 100_000_000_000 + n * 1_000_000_000;
+        events.push(Inbound::Market(MarketEvent {
+            instrument: I,
+            exchange_time: Timestamp::from_nanos(at),
+            receive_time: Timestamp::from_nanos(at),
+            kind: MarketKind::Quote {
+                bid_px: px(100),
+                bid_qty: qty(50),
+                ask_px: px(101),
+                ask_qty: qty(50),
+            },
+        }));
+    }
+
+    let writer = Segments::create(&temp.root(), header()).expect("create");
+    let mut engine = quoting(writer);
+    let mut feed = ListFeed { events, next: 0 };
+    run(&mut feed, &mut engine).expect("session");
+    assert!(
+        engine.venue().resting_count() > 0,
+        "the fixture must end with something resting"
+    );
+    drop(engine);
+
+    let mut engine = quoting(MemoryLog::with_capacity(1 << 12));
+    recover(&mut engine, &temp.root()).expect("recover");
+
+    assert_eq!(
+        engine.venue().resting_count(),
+        0,
+        "nothing may still be resting after a recovery"
+    );
+    let cancels = engine
+        .log()
+        .records()
+        .iter()
+        .filter(|r| matches!(r.event, Event::Out(event::Outbound::CancelSubmitted { .. })))
+        .count();
+    assert!(
+        cancels > 0,
+        "and the cancels belong to the resumed session's log"
     );
 }

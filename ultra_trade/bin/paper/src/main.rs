@@ -35,12 +35,10 @@ use engine::{Engine, EngineConfig, FeedAdapter};
 use event::codec::{InstrumentEntry, LogHeader};
 use event::{BackgroundLog, EngineState, Segments};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
-use marketdata::Aggregator;
 use recovery::recover;
 use sim_venue::{Fees, FillModel, SimVenue};
 use std::fs::File;
 use std::time::{Duration, Instant};
-use strategy::MovingAverageCrossover;
 use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
 
 /// How often the session says what it is doing.
@@ -151,17 +149,14 @@ fn main() {
     );
     let mut engine = Engine::new(config, venue, log);
     for (index, spec) in session.strategies.iter().enumerate() {
-        let subscription = engine.add_aggregator(
-            Aggregator::new(spec.instrument, spec.bars).expect("the config validated this"),
-        );
+        // The config builds its own strategy: which kind it is, and which
+        // settings that kind takes, are its business rather than every
+        // binary's.
+        let strategy = spec.build(StrategyId::new(index as u16), |aggregator| {
+            engine.add_aggregator(aggregator)
+        });
         engine
-            .add_strategy(Box::new(MovingAverageCrossover::new(
-                StrategyId::new(index as u16),
-                spec.instrument,
-                subscription,
-                spec.window,
-                spec.size,
-            )))
+            .add_strategy(strategy)
             .unwrap_or_else(|e| fail("strategy", format!("{e:?}")));
     }
 

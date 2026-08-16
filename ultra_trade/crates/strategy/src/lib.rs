@@ -30,8 +30,10 @@
 #![deny(missing_docs)]
 
 mod crossover;
+mod quoter;
 
 pub use crossover::MovingAverageCrossover;
+pub use quoter::Quoter;
 
 use event::{Intent, OrderKind, RiskReason, TimerToken};
 use marketdata::{Bar, BarSubscription, TopOfBook};
@@ -72,6 +74,28 @@ pub enum StrategyEvent<'a> {
         subscription: BarSubscription,
         /// The completed bar.
         bar: &'a Bar,
+    },
+    /// One of this strategy's orders is live at the venue.
+    ///
+    /// The only place a strategy learns the id of an order it asked for. It
+    /// cannot be told at [`Context::order`] time, because no order exists
+    /// until the risk gate has approved the intent and the venue has taken it
+    /// — until then there is nothing to name (`CONTEXT.md`).
+    ///
+    /// Without this a strategy can place a resting order and never manage it:
+    /// no id means no cancel, and a quote it cannot pull is a quote that fills
+    /// on every adverse move.
+    OrderLive {
+        /// The order, now nameable.
+        order: OrderId,
+        /// What it trades.
+        instrument: InstrumentId,
+        /// Which way.
+        side: Side,
+        /// How much, as the gate rounded it.
+        qty: Qty,
+        /// Market or limit, with the limit price as the gate rounded it.
+        kind: OrderKind,
     },
     /// One of this strategy's orders executed, in part or in full.
     Fill {
@@ -154,6 +178,7 @@ pub struct Context<'a> {
     now: ExchangeTime,
     intents: &'a mut Vec<Intent>,
     timers: &'a mut Vec<TimerRequest>,
+    cancels: &'a mut Vec<OrderId>,
 }
 
 impl<'a> Context<'a> {
@@ -163,12 +188,14 @@ impl<'a> Context<'a> {
         now: ExchangeTime,
         intents: &'a mut Vec<Intent>,
         timers: &'a mut Vec<TimerRequest>,
+        cancels: &'a mut Vec<OrderId>,
     ) -> Context<'a> {
         Context {
             strategy,
             now,
             intents,
             timers,
+            cancels,
         }
     }
 
@@ -212,6 +239,27 @@ impl<'a> Context<'a> {
             kind,
             reduce_only: true,
         });
+    }
+
+    /// Asks to pull one of this strategy's own orders.
+    ///
+    /// Not a risk decision: a cancel only ever reduces exposure, so it is not
+    /// put to the gate. It is still refused if the order belongs to another
+    /// strategy — one strategy pulling another's quote is a bug that would
+    /// otherwise be silent and very hard to see.
+    ///
+    /// Cancelling an order that is already terminal is a no-op rather than an
+    /// error. A fill and a cancel can cross, and a strategy that had to win
+    /// that race would be wrong occasionally rather than never.
+    #[inline]
+    pub fn cancel(&mut self, order: OrderId) {
+        self.cancels.push(order);
+    }
+
+    /// How many cancels have been raised in this dispatch.
+    #[inline]
+    pub fn cancel_count(&self) -> usize {
+        self.cancels.len()
     }
 
     /// Asks to be woken at a future instant.

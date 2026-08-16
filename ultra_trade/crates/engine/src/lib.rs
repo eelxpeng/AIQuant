@@ -37,7 +37,9 @@ use event::{
 use marketdata::{
     AggregateError, Aggregator, Aggregators, Applied, Bar, BarSubscription, Books, MarkRule,
 };
-use oms::{OmsError, Order, Orders, PositionError, Positions, ReconState, VenueAdapter};
+use oms::{
+    OmsError, Order, OrderState, Orders, PositionError, Positions, ReconState, VenueAdapter,
+};
 use risk::{Decision, GateInput, RiskGate};
 use std::collections::VecDeque;
 use strategy::{Context, Strategy, StrategyEvent, TimerRequest};
@@ -134,6 +136,13 @@ pub struct Engine<V: VenueAdapter, L: EventLog> {
     venue_reports: Vec<Inbound>,
     scheduled: Vec<TimerRequest>,
     cancels: Vec<OrderId>,
+    /// Cancels a strategy asked for during the current dispatch.
+    ///
+    /// Separate from `cancels`, which is the operator's flatten-and-kill
+    /// sweep. Sharing one buffer would let a strategy's cancel be attributed
+    /// to the operator in the log, and "who pulled this quote" is exactly the
+    /// question the log exists to answer.
+    strategy_cancels: Vec<OrderId>,
 }
 
 impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
@@ -169,6 +178,7 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
             venue_reports: Vec::with_capacity(cap.per_step),
             scheduled: Vec::with_capacity(cap.per_step),
             cancels: Vec::with_capacity(cap.orders.min(1024)),
+            strategy_cancels: Vec::with_capacity(cap.per_step),
         }
     }
 
@@ -228,6 +238,20 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
     /// [`end_replay`]: Engine::end_replay
     pub fn begin_replay(&mut self) {
         self.replaying = true;
+    }
+
+    /// Cancels everything still live, as a restart must.
+    ///
+    /// A recovered session comes back with the orders it had resting. Left
+    /// alone they keep filling while it is halted — the position moves and
+    /// nobody decided that it should. The contract's answer is to cancel and
+    /// accept the lost queue position, because a known state beats a good
+    /// queue position after a crash (D-3).
+    ///
+    /// These cancels are ordinary decisions of the resumed session and are
+    /// recorded in its new segment, so the log says who pulled the quotes.
+    pub fn cancel_resting(&mut self, caused_by: Seq) -> Result<(), EngineError> {
+        self.cancel_all(caused_by)
     }
 
     /// Ends a replay and halts, which is where a recovered session starts.
@@ -382,6 +406,7 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         }
 
         self.flush_intents(seq)?;
+        self.flush_strategy_cancels(seq)?;
         self.flush_timer_requests(seq)?;
         Ok(())
     }
@@ -456,6 +481,27 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
                     px,
                     qty,
                     fee,
+                },
+            );
+        }
+
+        // Tell the strategy the moment its order becomes nameable. Before this
+        // there is no id to hand it, so a resting order it could not cancel
+        // would be a quote it could not pull.
+        // `is_live` is "not terminal", so a freshly submitted order is already
+        // live by that reading and this cannot be phrased in terms of it. What
+        // is wanted is narrower: the order stopped being unacknowledged and is
+        // now working at the venue. An order that went straight to a fill
+        // never rested, and the fill says everything there is to say about it.
+        if before.state() == OrderState::Pending && after.state() == OrderState::Working {
+            self.dispatch_one(
+                after.strategy(),
+                &StrategyEvent::OrderLive {
+                    order: after.id(),
+                    instrument: after.instrument(),
+                    side: after.side(),
+                    qty: after.qty(),
+                    kind: after.kind(),
                 },
             );
         }
@@ -617,6 +663,52 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         outcome
     }
 
+    /// Sends the cancels strategies asked for during this event.
+    ///
+    /// A cancel is not put to the risk gate: pulling an order only ever
+    /// reduces exposure, and a gate that could refuse one would be a gate that
+    /// can trap a strategy in a position.
+    fn flush_strategy_cancels(&mut self, caused_by: Seq) -> Result<(), EngineError> {
+        let mut cancels = std::mem::take(&mut self.strategy_cancels);
+        let mut outcome = Ok(());
+        for id in cancels.drain(..) {
+            // Ownership, and only ownership, is enforced here. One strategy
+            // pulling another's quote would otherwise be silent, and the log
+            // would show a cancel with no honest author.
+            let Some(order) = self.orders.get(id) else {
+                continue;
+            };
+            if !order.state().is_live() {
+                // A fill and a cancel crossed. Not an error: a strategy that
+                // had to win that race would be wrong occasionally instead of
+                // never.
+                continue;
+            }
+            let owner = order.strategy();
+            let at = self.now;
+            if self.venue.cancel(id).is_err() {
+                // Unreachable venue. The order stays live in our books, which
+                // is the honest state: we do not know that it is gone
+                // (Constitution V).
+                continue;
+            }
+            if let Some(order) = self.orders.get_mut(id) {
+                let _ = order.request_cancel(at);
+            }
+            let _ = owner;
+            if let Err(e) = self.record(Outbound::CancelSubmitted {
+                caused_by,
+                order: id,
+            }) {
+                outcome = Err(EngineError::Log(e));
+                break;
+            }
+        }
+        cancels.clear();
+        self.strategy_cancels = cancels;
+        outcome
+    }
+
     fn process_intent(&mut self, intent: &Intent, caused_by: Seq) -> Result<(), EngineError> {
         let Some(instrument) = self.instruments.get(intent.instrument.index()).copied() else {
             return self.reject(intent, RiskReason::UnknownInstrument, caused_by);
@@ -737,7 +829,13 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
     fn dispatch_all(&mut self, event: &StrategyEvent<'_>) {
         let now = self.now;
         for s in self.strategies.iter_mut() {
-            let mut ctx = Context::new(s.id(), now, &mut self.intents, &mut self.timers);
+            let mut ctx = Context::new(
+                s.id(),
+                now,
+                &mut self.intents,
+                &mut self.timers,
+                &mut self.strategy_cancels,
+            );
             s.on_event(event, &mut ctx);
         }
     }
@@ -747,7 +845,13 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         // An operator-attributed order has no strategy to tell, which is the
         // only way this lookup misses.
         if let Some(s) = self.strategies.get_mut(strategy.index()) {
-            let mut ctx = Context::new(s.id(), now, &mut self.intents, &mut self.timers);
+            let mut ctx = Context::new(
+                s.id(),
+                now,
+                &mut self.intents,
+                &mut self.timers,
+                &mut self.strategy_cancels,
+            );
             s.on_event(event, &mut ctx);
         }
     }

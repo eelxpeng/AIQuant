@@ -1,5 +1,5 @@
 error[E0599]: no method named `venue` found for struct `strategy::Context<'a>` in the current scope
-  --> tests/compile-fail/context_has_no_venue.rs:21:17
+  --> tests/compile-fail/context_has_no_venue.rs:23:17
    |
-21 |     let _ = ctx.venue();
+23 |     let _ = ctx.venue();
    |                 ^^^^^ method not found in `strategy::Context<'_>`

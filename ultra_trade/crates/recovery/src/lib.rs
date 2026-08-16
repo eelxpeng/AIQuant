@@ -204,6 +204,16 @@ where
         .last()
         .map(|r| Seq::new(r.seq.raw() + 1))
         .unwrap_or(Seq::FIRST);
+
+    // Pull whatever the session had resting. Reconstructing the venue brings
+    // those orders back live, and left alone they keep filling while the
+    // session is halted — the position would move and nobody would have
+    // decided that it should. Losing the queue position is the price of
+    // coming back to a state somebody chose (contract D-3).
+    //
+    // Recorded in the new segment as decisions of the resumed session, which
+    // is what they are.
+    engine.cancel_resting(next_seq)?;
     Ok(Recovered {
         records: records.len() as u64,
         next_seq,

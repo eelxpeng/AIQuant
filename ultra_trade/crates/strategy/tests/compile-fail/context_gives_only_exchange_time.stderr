@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/compile-fail/context_gives_only_exchange_time.rs:22:28
+  --> tests/compile-fail/context_gives_only_exchange_time.rs:24:28
    |
-22 |     let _: MonotonicTime = ctx.now();
+24 |     let _: MonotonicTime = ctx.now();
    |            -------------   ^^^^^^^^^ expected `Timestamp<Monotonic>`, found `Timestamp<Exchange>`
    |            |
    |            expected due to this
