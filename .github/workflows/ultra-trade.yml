@@ -264,6 +264,23 @@ jobs:
           cargo run -p paper --locked --offline -- "$conf" "$depth_md" "$depth_log" < /dev/null > /dev/null
           cargo run -p journal --locked --offline -- "$depth_log" --all | grep -q "book update applied"
           cargo run -p journal --locked --offline -- "$depth_log" --all | grep -q "book reset"
+          # The ladder the UI renders, and this session's own orders on it.
+          cargo run -p journal --locked --offline -- "$depth_log" --json \
+            > "${RUNNER_TEMP:-/tmp}/depth.json"
+          python3 -c "
+          import json, sys
+          b = json.load(open(sys.argv[1]))['book'][0]
+          assert b['bids'] and b['asks'], 'no ladder'
+          assert 'working' in b, 'no working orders on the ladder'
+          " "${RUNNER_TEMP:-/tmp}/depth.json"
+          # A config naming a different instrument must be refused, not run.
+          wrong="${RUNNER_TEMP:-/tmp}/wrong.conf"
+          sed 's/^instrument SMOKE/instrument NOPE/; s/^limits SMOKE/limits NOPE/; s/crossover SMOKE/crossover NOPE/' \
+            "$conf" > "$wrong"
+          if cargo run -p backtest --locked --offline -- "$depth_log" "$wrong" 2>/dev/null; then
+            echo "backtest ran a config for the wrong instrument" >&2
+            exit 1
+          fi
           # A session that reset mid-stream must keep trading afterwards, so the
           # reset has to leave a usable book rather than an empty one.
           cargo run -p journal --locked --offline -- "$depth_log" | grep -q "BOOK RESYNCS"

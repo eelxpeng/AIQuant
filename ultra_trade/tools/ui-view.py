@@ -16,6 +16,7 @@ on a second monitor all day is not the thing that can flatten a book (D-3).
 """
 
 import argparse
+import json
 import pathlib
 import sys
 from http.server import ThreadingHTTPServer
@@ -35,8 +36,16 @@ class Viewer(Handler):
         return self._json(404, {"error": f"no route {self.path}"})
 
     def do_POST(self):
-        # Said explicitly rather than by omission: this server has no write
-        # side at all, and a client that tries gets told why.
+        if self.path == "/api/sweep":
+            # A sweep writes nothing: it is N backtests over a recording, and
+            # cannot touch a live session. POST only because it carries a body.
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                return self._sweep(json.loads(self.rfile.read(length) or b"{}"))
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "body is not JSON"})
+        # Said explicitly rather than by omission: this server has no *command*
+        # path at all, and a client that tries gets told why.
         self._json(
             405,
             {

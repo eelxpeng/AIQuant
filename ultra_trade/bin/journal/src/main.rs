@@ -939,6 +939,52 @@ fn print_json(
         None => write!(out, "  \"feed_lag_nanos\": null")?,
     }
 
+    // The book as the recording leaves it, with this session's own resting
+    // orders marked. "Where are my quotes against everyone else's" is the
+    // question a ladder is for, and neither half answers it alone.
+    writeln!(out, ",")?;
+    writeln!(out, "  \"book\": [")?;
+    let mut books: Vec<String> = Vec::new();
+    for entry in &header.instruments {
+        let side_json = |side: types::Side| -> String {
+            summary
+                .book
+                .depth(entry.id, side)
+                .map(|d| {
+                    d.levels()
+                        .iter()
+                        .map(|l| format!("{{\"px\": \"{}\", \"qty\": \"{}\"}}", l.px, l.qty))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        };
+        let mine: Vec<String> = summary
+            .working
+            .iter()
+            .filter(|o| o.instrument == entry.id)
+            .filter_map(|o| {
+                o.limit.map(|px| {
+                    format!(
+                        "{{\"order\": \"{}\", \"side\": {}, \"px\": \"{px}\", \"qty\": \"{}\"}}",
+                        o.order,
+                        quoted(&format!("{:?}", o.side)),
+                        o.remaining
+                    )
+                })
+            })
+            .collect();
+        books.push(format!(
+            "    {{\"symbol\": {}, \"bids\": [{}], \"asks\": [{}], \"working\": [{}]}}",
+            quoted(symbol_of(symbols, entry.id)),
+            side_json(types::Side::Buy),
+            side_json(types::Side::Sell),
+            mine.join(", ")
+        ));
+    }
+    writeln!(out, "{}", books.join(",\n"))?;
+    write!(out, "  ]")?;
+
     // The fills, when asked for. Left out by default because a long session
     // has tens of thousands and a caller that only wants the totals should not
     // pay for them.

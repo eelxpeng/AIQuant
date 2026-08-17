@@ -209,16 +209,30 @@ def book_checksum(book, price_precision, qty_precision):
     return zlib.crc32("".join(parts).encode())
 
 
-def apply_levels(book, key, updates):
-    """Folds one side's deltas in. A quantity of zero removes the level."""
+def apply_levels(book, key, updates, depth=10):
+    """Folds one side's deltas in, and says which prices are no longer there.
+
+    A quantity of zero removes a level, which is how the venue says it. The
+    returned list is the prices that left, **including the ones pushed out of
+    the top `depth`** — the venue never mentions those again, so anything
+    downstream that is not told will hold them for ever.
+
+    That is not hypothetical: it is the bug this function was written wrong for
+    the first time. The venue's checksum covers the top ten of *this* book, so
+    it kept passing while the engine's copy accumulated phantom levels at the
+    touch.
+    """
     side = book[key]
+    before = {level["price"] for level in side}
     for update in updates:
         price = update["price"]
         side[:] = [level for level in side if level["price"] != price]
         if update["qty"] != "0" and float(update["qty"]) > 0:
             side.append(update)
     side.sort(key=lambda level: float(level["price"]), reverse=(key == "bids"))
-    del side[10:]
+    del side[depth:]
+    after = {level["price"] for level in side}
+    return sorted(before - after)
 
 
 def symbol_of(pair):
@@ -314,8 +328,10 @@ def stream(pairs, seconds, depth=0):
                         book["bids"].clear()
                         book["asks"].clear()
                         emit(f"R {symbol} {stamp}")
-                    apply_levels(book, "bids", row.get("bids", []))
-                    apply_levels(book, "asks", row.get("asks", []))
+                    gone = {
+                        "bids": apply_levels(book, "bids", row.get("bids", []), depth),
+                        "asks": apply_levels(book, "asks", row.get("asks", []), depth),
+                    }
 
                     # One line per changed level, then the marker that puts the
                     # whole update in force. Nothing downstream may act on half
@@ -327,6 +343,11 @@ def stream(pairs, seconds, depth=0):
                                     symbol, stamp, side, lvl["price"], lvl["qty"]
                                 )
                             )
+                        # Levels that left the top of the book. The venue stops
+                        # mentioning them rather than removing them, so this is
+                        # the only chance anything downstream gets to hear.
+                        for price in gone[key]:
+                            emit(f"L {symbol} {stamp} {side} {price} 0")
                     emit(f"A {symbol} {stamp}")
 
                     # The venue's own opinion of whether our book is right. A

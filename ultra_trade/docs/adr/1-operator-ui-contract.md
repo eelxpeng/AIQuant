@@ -192,7 +192,39 @@ staleness has to be shown rather than hidden. Two programs is more to build
 than one. `journal --json` is a second output format to keep working.
 
 **What it does not settle.** Authentication, and therefore anything beyond a
-single machine (D-3). Whether the viewer should render an order book, which is
-a question about what is useful rather than what is safe. Whether a sweep
-launched from the UI should be allowed to consume the machine a live session is
-running on — a resource question this record does not answer.
+single machine (D-3).
+
+---
+
+## Amendment, 2026-08-18: the two questions this left open
+
+Both were answered by building it (#36), and are recorded here rather than only
+in the code.
+
+### D-8 · A sweep is refused where it could starve a live session
+
+The original record asked "whether a sweep launched from the UI should be
+allowed to consume the machine a live session is running on" and declined to
+answer. The answer is that it depends on which program is asking, and the
+distinction is already there:
+
+- **The viewer** may sweep. It is pointed at a recording, and a recording does
+  not care how busy the machine is.
+- **The console** may not, unless started with `--allow-sweep`. It is attached
+  to a **running session** by definition, and starving a live engine to answer
+  a research question is not a trade anyone would make deliberately.
+
+Off by default in the one place it is dangerous, available in the one place it
+is not. A sweep writes nothing either way — it is N backtests over a file — so
+this is purely about the machine, and the refusal says so.
+
+### D-9 · The book is worth rendering, with our own orders on it
+
+Also left open as "a question about what is useful rather than what is safe".
+It is useful, and the reason is narrower than "traders like ladders": a resting
+order's *value* is its position in a queue, and depth plus our own working
+orders is the only view that shows it. Neither half answers it alone.
+
+A working order at a price the book does not show is listed separately rather
+than dropped. It is still ours and still exposed, and a ladder that quietly
+omitted it would be worst exactly when a quote had drifted somewhere unexpected.

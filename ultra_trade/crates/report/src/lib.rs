@@ -75,6 +75,13 @@ pub struct SessionReport {
     ///
     /// [`book_resets`]: SessionReport::book_resets
     pub book_resyncs: u64,
+    /// The order book as the recording leaves it.
+    ///
+    /// Rebuilt while walking, so it costs nothing extra and cannot disagree
+    /// with the marks taken from the same object.
+    pub book: Books,
+    /// Orders the recording shows as still live.
+    pub working: Vec<WorkingOrder>,
     /// How stale this recording's market data was when it arrived.
     ///
     /// `None` when the recording holds no market events, which is a different
@@ -168,6 +175,29 @@ pub struct FeedLag {
     pub max: i64,
 }
 
+/// An order the recording shows as still live at the end.
+///
+/// Derived the same way everything else here is: an `OrderSubmitted` with no
+/// terminal report after it. Useful on a book ladder, where "where are my
+/// quotes relative to everyone else's" is the question being asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkingOrder {
+    /// Its id.
+    pub order: OrderId,
+    /// What it trades.
+    pub instrument: InstrumentId,
+    /// Which way.
+    pub side: Side,
+    /// How much was asked for.
+    pub qty: Qty,
+    /// How much of it is still on the book.
+    ///
+    /// A fill can be partial, so an order is live until the fills add up.
+    pub remaining: Qty,
+    /// Where it rests. `None` for a market order, which does not.
+    pub limit: Option<Px>,
+}
+
 /// Why a log could not be summarized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReportError {
@@ -213,6 +243,8 @@ pub fn summarize(
         feed_lag: None,
         book_resets: 0,
         book_resyncs: 0,
+        book: Books::with_instruments(instrument_count),
+        working: Vec::new(),
         valuation: Valuation {
             rule,
             marks: vec![None; instrument_count],
@@ -237,6 +269,9 @@ pub fn summarize(
     // traded is a slice rather than a map — and it stays in log order.
     let mut base: Option<u64> = None;
     let mut submitted: Vec<Option<(InstrumentId, Side)>> = Vec::new();
+    // Every order the log submitted, and whether anything terminal happened to
+    // it afterwards. A `None` slot is an order still live at the end.
+    let mut live: Vec<Option<WorkingOrder>> = Vec::new();
 
     let mut peak = Notional::ZERO;
 
@@ -249,6 +284,8 @@ pub fn summarize(
                         order,
                         instrument,
                         side,
+                        qty,
+                        kind,
                         ..
                     } => {
                         report.orders_submitted += 1;
@@ -258,6 +295,17 @@ pub fn summarize(
                             submitted.resize(index + 1, None);
                         }
                         submitted[index] = Some((instrument, side));
+                        if live.len() <= index {
+                            live.resize(index + 1, None);
+                        }
+                        live[index] = Some(WorkingOrder {
+                            order,
+                            instrument,
+                            side,
+                            qty,
+                            remaining: qty,
+                            limit: kind.limit_px(),
+                        });
                     }
                     Outbound::CancelSubmitted { .. } => report.cancels_submitted += 1,
                     Outbound::IntentRejected { reason, .. } => {
@@ -271,6 +319,34 @@ pub fn summarize(
 
             Event::In(inbound) => {
                 report.inputs += 1;
+                // Anything terminal ends the order. Checked before the fill
+                // arm below, because a fill can be the terminal report.
+                if let Inbound::Venue(venue) = inbound
+                    && let Some(start) = base
+                {
+                    let index = venue.order.raw().saturating_sub(start) as usize;
+                    if let Some(slot) = live.get_mut(index)
+                        && let Some(order) = slot.as_mut()
+                    {
+                        match venue.kind {
+                            // A fill can be partial, so the order is live
+                            // until the fills add up to what was asked for.
+                            // Treating any fill as the end would hide a quote
+                            // that is still sitting on the book.
+                            VenueKind::Filled { qty, .. } => {
+                                order.remaining =
+                                    Qty::from_scaled(order.remaining.to_scaled() - qty.to_scaled());
+                                if order.remaining.to_scaled() <= 0 {
+                                    *slot = None;
+                                }
+                            }
+                            VenueKind::Cancelled
+                            | VenueKind::Rejected { .. }
+                            | VenueKind::Expired => *slot = None,
+                            VenueKind::Accepted | VenueKind::CancelRejected { .. } => {}
+                        }
+                    }
+                }
                 if let Inbound::Market(market) = inbound {
                     // A reset after market data has already flowed is a resync,
                     // not a subscription opening. Only the position in the
@@ -365,6 +441,8 @@ pub fn summarize(
     }
     report.valuation.total = report.realized + report.valuation.unrealized;
     report.feed_lag = summarize_lag(&mut lags);
+    report.book = books.clone();
+    report.working = live.into_iter().flatten().collect();
     report.book_resets = books.book_resets();
     Ok(report)
 }

@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **27,700 lines, 490 tests, 15 crates, 5 binaries, zero third-party
+Today: **28,100 lines, 491 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path — and a UI that adds none.
 
 ---
@@ -40,7 +40,7 @@ ticks when it works end to end from a command line, not when its parts compile.
       with the failures that only appear at that timescale.
 - [ ] **12 · Live.** Real orders, real money.
 
-Rungs 1–8 and 10 took PRs #7 to #35. Rung 12 is deliberately far away and nothing
+Rungs 1–8 and 10 took PRs #7 to #36. Rung 12 is deliberately far away and nothing
 below should be read as saying otherwise.
 
 ---
@@ -101,12 +101,13 @@ the architecture doc was written.
 - [x] **Live or finished** is derived rather than asserted: the recording
       growing is the only evidence a session is running, and the page shows
       "no new records for Ns" when it stops.
-- [ ] **Sweep results in the UI.** `sweep --json` exists and nothing renders it
-      yet — the in-sample and out-of-sample columns side by side, sortable,
-      with the rank change called out.
-- [ ] **The book, rendered.** Depth is in the recording and the page does not
-      show it. A ladder is the obvious thing a person wants when deciding
-      whether a quote is well placed.
+- [x] **Sweep results in the UI** (#36) — run a grid from the page, sortable by
+      any column, with the in-sample and out-of-sample winners flagged when the
+      ranking rearranges. Refused on the console unless `--allow-sweep`,
+      because that one is attached to a live session (ADR D-8).
+- [x] **The book, rendered** (#36) — a ladder per instrument with this
+      session's own resting orders picked out, because a resting order's value
+      is its place in a queue and neither half shows that alone (ADR D-9).
 - [ ] **Authentication**, and therefore anything beyond one machine. Both
       servers bind to loopback and neither asks who you are.
 
@@ -145,9 +146,10 @@ Making it harder to fool yourself.
       venue needs its own.
 - [ ] **Duplicate detection.** Out-of-order events are refused; duplicates need
       a venue sequence number no feed has given us yet.
-- [ ] **Depth beyond the top levels.** The bridge subscribes to ten a side and
-      `Books` holds sixteen. A strategy trading real size wants more, and the
-      log volume grows with it.
+- [ ] **Depth beyond the top levels.** The bridge subscribes to ten a side. A
+      strategy trading real size wants more, and the log volume grows with it.
+      Note that `Books` holding *more* than the feed sends is what let phantom
+      levels accumulate (#36); the two numbers should move together.
 
 ### 5 · Going live — rung 12
 

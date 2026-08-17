@@ -582,6 +582,11 @@ picture:
    watches for the engine's own record of it, and `flatten` is never retried
    automatically because it is the one command that is not idempotent.
 
+The page also draws a **ladder** per instrument with this session's own resting
+orders picked out — a resting order's value is its place in a queue, and depth
+alone does not show that — and runs **sweeps**, sortable, flagging when the
+in-sample and out-of-sample winners differ.
+
 Money crosses that boundary as **strings**, never JSON numbers. A JSON number
 is a double, and a fixed-point price through one comes back a different price —
 the same round trip the bridge avoids.

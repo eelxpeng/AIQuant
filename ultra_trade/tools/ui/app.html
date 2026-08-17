@@ -60,6 +60,23 @@
   button.danger:hover:not(:disabled) { border-color: var(--bad); }
   #log { color: var(--dim); font-size: 12px; margin-top: 10px; white-space: pre-wrap; }
   svg { display: block; width: 100%; height: 180px; }
+  .ladders { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  .ladder h3 { font-size: 12px; margin: 0 0 6px; color: var(--accent); }
+  .ladder td.bar { width: 40%; padding: 0; }
+  .ladder .fill { height: 11px; border-radius: 2px; }
+  .ladder .fill.b { background: #24503f; }
+  .ladder .fill.a { background: #4d2b2e; margin-left: auto; }
+  .ladder tr.mine { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .ladder .tag { color: var(--accent); font-size: 11px; }
+  .form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .form label { color: var(--dim); font-size: 11px; }
+  .form input {
+    font: inherit; background: #12141a; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 3px; padding: 5px 7px; margin-left: 5px;
+  }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--ink); }
+  tr.moved td:first-child::after { content: " ⚠"; color: var(--warn); }
 </style>
 
 <header>
@@ -95,6 +112,27 @@
   <section>
     <h2>positions</h2>
     <div class="body"><table id="positions"></table></div>
+  </section>
+
+  <section>
+    <h2>book</h2>
+    <div class="body">
+      <div id="ladders" class="ladders"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>sweep</h2>
+    <div class="body">
+      <div class="form">
+        <label>config <input id="sw-conf" placeholder="examples/kraken.conf" size="28"></label>
+        <label>vary <input id="sw-vary" placeholder="BTCUSD.window=10,20,30" size="30"></label>
+        <label>split <input id="sw-split" value="0.7" size="5"></label>
+        <button id="sw-run">run</button>
+        <span id="sw-note" class="k"></span>
+      </div>
+      <table id="sweep"></table>
+    </div>
   </section>
 
   <section>
@@ -161,6 +199,61 @@ function curve(fills) {
           stroke-width="1.5" vector-effect="non-scaling-stroke"/>
     <text x="6" y="14" fill="#8b93a7" font-size="11">${hi.toFixed(2)}</text>
     <text x="6" y="176" fill="#8b93a7" font-size="11">${lo.toFixed(2)}</text>`;
+}
+
+// A ladder per instrument: everyone else's resting size, with this session's
+// own orders picked out. "Where are my quotes against the rest" is the whole
+// question, and neither half answers it alone.
+function ladders(book) {
+  if (!book || !book.length) {
+    el("ladders").innerHTML = `<div class="k">no depth in this recording</div>`;
+    return;
+  }
+  el("ladders").innerHTML = book
+    .map((b) => {
+      const rows = [];
+      const sizes = [...b.bids, ...b.asks].map((l) => px(l.qty));
+      const biggest = Math.max(1e-12, ...sizes);
+      const mine = (side, price) =>
+        b.working.filter((o) => o.side === side && o.px === price);
+
+      const line = (l, side) => {
+        const ours = mine(side, l.px);
+        const w = Math.max(1, (px(l.qty) / biggest) * 100);
+        const bar = `<div class="fill ${side === "Buy" ? "b" : "a"}" style="width:${w}%"></div>`;
+        return `<tr class="${ours.length ? "mine" : ""}">
+          <td class="${side === "Buy" ? "pos" : "neg"}">${l.px}</td>
+          <td>${l.qty}</td>
+          <td class="bar">${bar}</td>
+          <td class="tag">${ours.length ? ours.map((o) => o.order).join(" ") : ""}</td>
+        </tr>`;
+      };
+
+      // Asks descend to the touch, bids continue down from it, so the spread
+      // sits in the middle where a person expects to find it.
+      b.asks.slice().reverse().forEach((l) => rows.push(line(l, "Sell")));
+      const spread =
+        b.bids.length && b.asks.length
+          ? (px(b.asks[0].px) - px(b.bids[0].px)).toFixed(4)
+          : "—";
+      rows.push(`<tr><td colspan="4" style="color:#8b93a7;text-align:center;
+        border-top:1px solid #2a2e3a;border-bottom:1px solid #2a2e3a">
+        spread ${spread}</td></tr>`);
+      b.bids.forEach((l) => rows.push(line(l, "Buy")));
+
+      // A resting order at a price the book does not show is still ours and
+      // still exposed, so it is listed rather than dropped.
+      const shown = new Set([...b.bids, ...b.asks].map((l) => l.px));
+      const away = b.working.filter((o) => !shown.has(o.px));
+      const note = away.length
+        ? `<div class="k" style="margin-top:6px">away from the book:
+           ${away.map((o) => `${o.order} ${o.side} ${o.qty} @ ${o.px}`).join(", ")}</div>`
+        : "";
+
+      return `<div class="ladder"><h3>${b.symbol}</h3>
+        <table>${rows.join("")}</table>${note}</div>`;
+    })
+    .join("");
 }
 
 function alerts(d) {
@@ -281,6 +374,7 @@ function render(d) {
     }
   }
 
+  ladders(d.book);
   el("controls").hidden = !d.can_control;
 }
 
@@ -288,6 +382,98 @@ function note(text) {
   const log = el("log");
   log.textContent = `${new Date().toLocaleTimeString()}  ${text}\n` + log.textContent;
 }
+
+let sweepRows = null;
+let sweepSort = "in_total";
+
+function renderSweep() {
+  if (!sweepRows) return;
+  const num = (v) => (v === null ? -Infinity : px(v));
+  const sorted = [...sweepRows].sort((a, b) => num(b[sweepSort]) - num(a[sweepSort]));
+
+  // Which variant won each column. When they differ, the in-sample winner was
+  // partly luck — the thing the split exists to show.
+  const bestIn = [...sweepRows].sort((a, b) => num(b.in_total) - num(a.in_total))[0];
+  const hasOut = sweepRows.some((r) => r.out_total !== null);
+  const bestOut = hasOut
+    ? [...sweepRows].sort((a, b) => num(b.out_total) - num(a.out_total))[0]
+    : null;
+  const moved = bestOut && bestIn.variant !== bestOut.variant;
+
+  const head = ["variant", "in total", "in drawdown", "fills", "refused"];
+  if (hasOut) head.push("OUT total", "out drawdown");
+  const keys = ["variant", "in_total", "in_drawdown", "fills", "refused",
+                "out_total", "out_drawdown"];
+
+  el("sweep").innerHTML = `
+    <thead><tr>${head
+      .map(
+        (h, i) =>
+          `<th class="sortable" data-key="${keys[i]}">${h}${
+            keys[i] === sweepSort ? " ▾" : ""
+          }</th>`
+      )
+      .join("")}</tr></thead>
+    <tbody>${sorted
+      .map((r) => {
+        const flag = moved && (r === bestIn || r === bestOut) ? "moved" : "";
+        const cells = [
+          r.variant,
+          r.in_total,
+          r.in_drawdown,
+          r.fills,
+          r.refused,
+        ];
+        if (hasOut) cells.push(r.out_total ?? "—", r.out_drawdown ?? "—");
+        return `<tr class="${flag}">${cells
+          .map((c, i) => `<td class="${i === 1 || i === 5 ? sign(c) : ""}">${c}</td>`)
+          .join("")}</tr>`;
+      })
+      .join("")}</tbody>`;
+
+  el("sw-note").textContent = moved
+    ? `the ranking rearranged — ${bestIn.variant} won in sample, ${bestOut.variant} out of it`
+    : hasOut
+    ? `${bestIn.variant} won both columns — weak evidence, not proof`
+    : "no split: the top row is not evidence of anything";
+  el("sw-note").className = moved ? "k neg" : "k";
+
+  document.querySelectorAll("#sweep th.sortable").forEach((th) =>
+    th.addEventListener("click", () => {
+      sweepSort = th.dataset.key;
+      renderSweep();
+    })
+  );
+}
+
+el("sw-run").addEventListener("click", async () => {
+  const button = el("sw-run");
+  const vary = el("sw-vary").value.split(/\s+/).filter(Boolean);
+  const split = parseFloat(el("sw-split").value);
+  button.disabled = true;
+  el("sw-note").textContent = "running… a grid is many backtests";
+  el("sw-note").className = "k";
+  try {
+    const r = await fetch("/api/sweep", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: el("sw-conf").value,
+        vary,
+        split: Number.isFinite(split) ? split : null,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    sweepRows = d.runs;
+    renderSweep();
+  } catch (e) {
+    el("sw-note").textContent = e.message;
+    el("sw-note").className = "k neg";
+  } finally {
+    button.disabled = false;
+  }
+});
 
 async function poll() {
   try {

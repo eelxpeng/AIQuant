@@ -132,6 +132,23 @@ pub fn backtest(
             session.instruments.len()
         )));
     }
+    // And they must be the *same* instruments, in the same order. The tick and
+    // lot come from the recording, so a config naming different symbols does
+    // not fail loudly — it trades the recording's instrument under the config's
+    // name and reports the result as if it meant something. Found by pointing
+    // a config for one symbol at a recording of another and getting 874
+    // refusals instead of a refusal.
+    for (declared, entry) in session.instruments.iter().zip(&header.instruments) {
+        let recorded = entry.symbol_str().unwrap_or("<not utf-8>");
+        if declared.symbol != recorded {
+            return Err(HarnessError::Mismatch(format!(
+                "instrument {} is {recorded} in the recording and {} in the config; \
+                 they must be the same, in the same order",
+                entry.id.raw(),
+                declared.symbol
+            )));
+        }
+    }
 
     // The two bindings that make this a backtest: a recorded feed, and a
     // simulated venue. Market data only — feeding the recorded venue reports

@@ -67,6 +67,7 @@ class Handler(BaseHTTPRequestHandler):
 
     tools = None
     console = None  # set only by the console server (D-3)
+    allow_sweep = True
 
     def log_message(self, *_):
         pass  # the access log is noise; failures are reported in the response
@@ -86,6 +87,37 @@ class Handler(BaseHTTPRequestHandler):
 
     def _page(self):
         self._send(200, (HERE / "app.html").read_bytes(), "text/html; charset=utf-8")
+
+    def _sweep(self, body):
+        """Runs a grid of backtests and hands back the ranked rows.
+
+        A sweep is N backtests and can saturate the machine. The console is by
+        definition attached to a **running session**, so it refuses unless
+        started with `--allow-sweep`: starving a live engine to answer a
+        research question is not a trade anyone would make deliberately.
+        """
+        if not self.allow_sweep:
+            return self._json(
+                409,
+                {
+                    "error": "this server is attached to a live session and will not "
+                    "run a sweep; use the viewer, or start the console with "
+                    "--allow-sweep"
+                },
+            )
+        config = str(body.get("config", "")).strip()
+        if not config:
+            return self._json(400, {"error": "no config given"})
+        vary = body.get("vary") or []
+        if not isinstance(vary, list) or any(not isinstance(v, str) for v in vary):
+            return self._json(400, {"error": "vary must be a list of strings"})
+        split = body.get("split")
+        try:
+            return self._json(200, self.tools.sweep(config, vary, split))
+        except subprocess.TimeoutExpired:
+            return self._json(504, {"error": "the sweep did not finish in time"})
+        except RuntimeError as e:
+            return self._json(502, {"error": str(e)})
 
     def _session(self, with_fills):
         started = time.time()

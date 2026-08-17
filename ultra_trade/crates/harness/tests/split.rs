@@ -171,3 +171,55 @@ fn the_in_sample_side_comes_first() {
         "in sample must be the earlier stretch"
     );
 }
+
+// ---- the config and the recording must agree -----------------------------
+
+#[test]
+fn a_config_for_a_different_instrument_is_refused() {
+    // The tick and lot come from the recording, so a config naming another
+    // symbol does not fail on its own — it trades the recording's instrument
+    // under the config's name and reports the result as if it meant
+    // something. Found by pointing an `AAA` config at a `BTCUSD` recording and
+    // getting 874 refusals instead of a refusal.
+    use config::{InstrumentConfig, SessionConfig};
+    use event::codec::{InstrumentEntry, LogHeader};
+    use harness::{Costs, backtest};
+    use marketdata::MarkRule;
+    use risk::LimitBook;
+    use types::{Instrument, RoundDir};
+
+    let recorded = Instrument::new(
+        I,
+        Px::from_scaled(SCALE / 100),
+        Qty::from_scaled(SCALE),
+        Qty::from_scaled(SCALE),
+    )
+    .expect("conventions");
+    let header = LogHeader::new(
+        1,
+        Timestamp::from_nanos(0),
+        OrderId::new(0),
+        vec![InstrumentEntry::new(recorded, "BTCUSD").expect("entry")],
+    );
+    let session = SessionConfig {
+        instruments: vec![InstrumentConfig {
+            symbol: "AAA".to_string(),
+            id: I,
+            instrument: recorded,
+        }],
+        limits: LimitBook::with_instruments(1),
+        strategies: Vec::new(),
+    };
+
+    let error = backtest(
+        &header,
+        &[],
+        &session,
+        Costs::DEFAULT,
+        MarkRule::Mid(RoundDir::Down),
+    )
+    .expect_err("the symbols disagree");
+    let text = error.to_string();
+    assert!(text.contains("BTCUSD"), "{text}");
+    assert!(text.contains("AAA"), "{text}");
+}
