@@ -335,3 +335,27 @@ impl<K: ClockKind> fmt::Debug for Span<K> {
         write!(f, "Span<{}>({}ns)", core::any::type_name::<K>(), self.nanos)
     }
 }
+
+/// How far behind the venue's clock an event arrived, in nanoseconds.
+///
+/// **The only place the exchange clock and the receive clock are compared.**
+/// Everywhere else that does not compile, because a market-state decision made
+/// across two clocks reads the market as of a moment it was never in. Latency
+/// measurement is the one use `CONTEXT.md` sanctions for receive time, and it
+/// gets a named function so the exception is countable rather than a
+/// subtraction somebody talks themselves into at a call site.
+///
+/// Positive is the normal direction: the venue stamped it, then it reached us.
+/// **Negative means the local clock is behind the venue's**, which is clock
+/// skew and is reported rather than clamped — it is the one condition that
+/// makes every other lag figure in the same run untrustworthy.
+///
+/// Returns nanoseconds rather than a [`Span`], because a `Span` carries the
+/// clock kind it was measured on and this quantity belongs to neither.
+///
+/// This is a measurement, never an input to a decision. Nothing on the order
+/// path may call it.
+#[inline]
+pub fn feed_lag_nanos(exchange: ExchangeTime, receive: ReceiveTime) -> i64 {
+    receive.to_nanos().saturating_sub(exchange.to_nanos())
+}

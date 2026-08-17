@@ -185,6 +185,9 @@ jobs:
           # and says what it marked at.
           cargo run -p journal --locked --offline -- "$paper_log" | grep -q "TOTAL"
           cargo run -p journal --locked --offline -- "$paper_log" | grep -q "marked at"
+          # Both clocks are on every event and nothing compared them until now.
+          # No network here: the lag is read from the recording's own stamps.
+          cargo run -p journal --locked --offline -- "$paper_log" | grep -q "feed lag"
 
           # A sweep over the recording: a grid of variants, split in and out of
           # sample. The nag when there is no split is load-bearing, so it is

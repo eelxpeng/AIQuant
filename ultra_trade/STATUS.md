@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — it is the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **25,400 lines, 450 tests, 15 crates, 5 binaries, zero third-party
+Today: **25,700 lines, 454 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path.
 
 ---
@@ -33,12 +33,16 @@ exist.
 - [x] **7 · Research throughput.** Run a grid of configurations over one
       recording in one command, ranked, and measured out of sample so the
       in-sample winner can be caught being luck.
-- [ ] **8 · A real venue, read-only.** ← **you are here.** Real market data over a real connection,
-      still trading against the simulator.
-- [ ] **9 · Live.** Real orders, real money. Everything above has to be true
-      first, and rung 8 has to have run for a long time without surprises.
+- [x] **8 · A real venue, read-only.** Real market data over a real streaming
+      connection, still trading against the simulator — and the first
+      measurement of how stale that data is.
+- [ ] **9 · Live.** ← **you are here**, and standing well back. Real orders,
+      real money. Everything above has to be true first, rung 8 has to have run
+      for a long time without surprises, and this repository has never held a
+      credential — where a key lives is undecided and is a prerequisite.
 
-Rungs 1–7 took PRs #7 to #29. Rung 9 is deliberately far away.
+Rungs 1–8 took PRs #7 to #30. Rung 9 is deliberately far away, and
+nothing below should be read as saying it is close.
 
 ---
 
@@ -131,10 +135,28 @@ Ordered by what I would do next, not by size.
       says nothing about how much risk bought it — `total` and `drawdown` side
       by side is the poor version of that.
 
-### Towards a real venue — rungs 8 and 9
+### Market data
+
+- [x] `tools/kraken-stream.py` — a streaming websocket bridge, stdlib only (#30)
+- [x] `types::feed_lag_nanos` — the one sanctioned comparison of the exchange
+      and receive clocks, and the first time either was measured against the
+      other (#30)
+- [x] `journal` reports the lag distribution, and shouts about clock skew (#30)
+- [ ] **A declared latency budget.** The hot path and the feed are both
+      measured now, so a budget is finally *possible* to state. Nothing states
+      one, so the constitution's "cite a benchmark against the budget" still
+      has no budget to cite against.
+- [ ] Order-book depth. The feed carries top of book only, so a fill model
+      cannot walk a book it does not have.
+
+### Towards live — rung 9
 
 - [ ] `bin/live` and a real venue adapter. Nothing can lose money until this
       exists, which is by construction and not an accident.
+- [ ] **An authenticated connection.** The streaming feed is public data and
+      needs no credentials. Sending an order needs a key, and this repository
+      has never held one — where a key lives and how it is kept out of a log is
+      undecided and is a prerequisite, not a detail.
 - [ ] **D-3 against a real venue** — ask the venue for its open orders and
       cancel by *its* list. The current form cancels what the *reconstructed*
       simulated venue holds. A real venue has to be asked.
@@ -156,8 +178,8 @@ Ordered by what I would do next, not by size.
       can be *compared*, but nothing says what the number is allowed to *be*.
       The constitution asks a hot-path change to cite a benchmark against a
       budget; there is no budget to cite against.
-- [ ] **End-to-end latency cannot be measured at all.** The REST bridge is ~6s
-      behind the market. That needs a streaming feed, which is rung 8 work.
+- [ ] **End-to-end latency** — the feed's lag is measured and the engine's step
+      is benchmarked, but nothing measures the whole path from wire to order.
 - [ ] **No separate `client` process.** Operator commands come from stdin.
 
 ---
