@@ -304,9 +304,11 @@ jobs:
             > "${RUNNER_TEMP:-/tmp}/depth.json"
           python3 -c "
           import json, sys
-          b = json.load(open(sys.argv[1]))['book'][0]
+          b = json.load(open(sys.argv[1]))['ladder'][0]
           assert b['bids'] and b['asks'], 'no ladder'
           assert 'working' in b, 'no working orders on the ladder'
+          d = json.load(open(sys.argv[1]))
+          assert isinstance(d['book'], dict), 'the reset counts lost their key'
           " "${RUNNER_TEMP:-/tmp}/depth.json"
           # A config naming a different instrument must be refused, not run.
           wrong="${RUNNER_TEMP:-/tmp}/wrong.conf"

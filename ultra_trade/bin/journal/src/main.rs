@@ -958,7 +958,11 @@ fn print_json(
     // orders marked. "Where are my quotes against everyone else's" is the
     // question a ladder is for, and neither half answers it alone.
     writeln!(out, ",")?;
-    writeln!(out, "  \"book\": [")?;
+    // `ladder`, not `book`: the reset counts above already claim that name, and
+    // two keys with one name in a JSON object is a key silently lost. This one
+    // was — every parser keeps the last, so the reset alert read `undefined`
+    // from the moment the ladder was added.
+    writeln!(out, "  \"ladder\": [")?;
     let mut books: Vec<String> = Vec::new();
     for entry in &header.instruments {
         let side_json = |side: types::Side| -> String {

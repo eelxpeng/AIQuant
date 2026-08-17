@@ -183,6 +183,10 @@ Making it harder to fool yourself.
       always say when its next event would allocate; no binary asked. Past
       ~4,000 orders a session allocates on the hot path in silence. `paper`
       now warns and repeats it in the summary.
+- [x] **A silently lost JSON key** (#37). The report emitted two keys called
+      `book`, so the UI's book-resync alert had been reading `undefined` since
+      the ladder landed. The long run surfaced it, and it mattered: the session
+      resynchronised once in thirteen minutes.
 - [x] **The read path paced and bounded** (#37). The page paces itself off the
       last read's cost and the fills array says how much it omitted.
 - [ ] **An incremental read.** `journal` walks the whole recording every call —

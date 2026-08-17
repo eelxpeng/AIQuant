@@ -627,7 +627,12 @@ from scratch every second is O(n²) over the session, and the fix is an
 incremental read the format is already shaped for — records are fixed-size and
 addressable by arithmetic. That is not built.
 
-**One thing was silently wrong.** The engine can say when its next event would
+**The checksum earned its keep.** Over the run the venue caught our book being
+wrong once and the session resynchronised — a book divergence in thirteen
+minutes of ordinary market. Every session before depth existed carried that
+error silently; this one recorded it and rebuilt.
+
+**Two things were silently wrong.** The engine can say when its next event would
 allocate, and no binary asked. A session that outgrows its reserved capacity —
 about four thousand orders — starts allocating on the hot path, which
 Constitution VI forbids, and said nothing. `paper` now warns the moment it
