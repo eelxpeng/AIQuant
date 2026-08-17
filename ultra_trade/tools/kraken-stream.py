@@ -2,6 +2,7 @@
 """Stream Kraken's book and trades as the feed line protocol.
 
     python3 tools/kraken-stream.py BTC/USD ETH/USD > /tmp/md &
+    python3 tools/kraken-stream.py BTC/USD --depth 10 > /tmp/md &   # with depth
     cargo run -p paper -- session.conf /tmp/md live.log
 
 The polling bridge (`kraken-bridge.py`) asks Kraken for the book every few
@@ -181,24 +182,40 @@ def symbol_of(pair):
     return pair.replace("/", "")
 
 
-def stream(pairs, seconds):
+def stream(pairs, seconds, depth=0):
     """One connection's worth of events. Returns when it drops."""
     ws = Socket(HOST, PATH, timeout=30)
     try:
-        ws.send(
-            json.dumps(
-                {
-                    "method": "subscribe",
-                    "params": {
-                        "channel": "ticker",
-                        "symbol": pairs,
-                        # Book updates, not trade prints: the engine's book is
-                        # what the strategies read and the risk gate ages.
-                        "event_trigger": "bbo",
-                    },
-                }
+        if depth > 0:
+            # Depth supersedes the ticker: the book's top follows from its
+            # levels, so subscribing to both would set the same top twice.
+            ws.send(
+                json.dumps(
+                    {
+                        "method": "subscribe",
+                        "params": {
+                            "channel": "book",
+                            "symbol": pairs,
+                            "depth": depth,
+                        },
+                    }
+                )
             )
-        )
+        else:
+            ws.send(
+                json.dumps(
+                    {
+                        "method": "subscribe",
+                        "params": {
+                            "channel": "ticker",
+                            "symbol": pairs,
+                            # Book updates, not trade prints: the engine's book
+                            # is what the strategies read and the risk gate ages.
+                            "event_trigger": "bbo",
+                        },
+                    }
+                )
+            )
         ws.send(
             json.dumps(
                 {"method": "subscribe", "params": {"channel": "trade", "symbol": pairs}}
@@ -206,6 +223,10 @@ def stream(pairs, seconds):
         )
 
         deadline = None if seconds is None else time.time() + seconds
+        # A book snapshot carries no timestamp of its own, so it inherits the
+        # last one seen rather than being stamped with a local clock — a receive
+        # time in an exchange-time field is the mixing the types forbid.
+        last_seen = 0
         for text in ws.texts():
             if deadline is not None and time.time() > deadline:
                 return
@@ -223,6 +244,22 @@ def stream(pairs, seconds):
                             row["ask_qty"],
                         )
                     )
+            elif channel == "book":
+                for row in message.get("data", []):
+                    symbol = symbol_of(row["symbol"])
+                    stamp = nanos(row["timestamp"]) if "timestamp" in row else last_seen
+                    last_seen = stamp
+                    # One line per changed level, then the marker that puts the
+                    # whole update in force. Nothing downstream may act on half
+                    # of it (ADR, order-book depth D-2).
+                    for side, key in (("B", "bids"), ("S", "asks")):
+                        for lvl in row.get(key, []):
+                            emit(
+                                "L {} {} {} {} {}".format(
+                                    symbol, stamp, side, lvl["price"], lvl["qty"]
+                                )
+                            )
+                    emit(f"A {symbol} {stamp}")
             elif channel == "trade":
                 if message.get("type") == "snapshot":
                     # Kraken opens a trade subscription with its recent history.
@@ -254,6 +291,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pair", nargs="+", help="Kraken v2 pairs, e.g. BTC/USD")
     parser.add_argument(
+        "--depth",
+        type=int,
+        default=0,
+        help="levels a side to stream; 0 (the default) streams top of book only",
+    )
+    parser.add_argument(
         "--seconds", type=int, default=None, help="stop after this long"
     )
     parser.add_argument(
@@ -274,7 +317,7 @@ def main():
                 return 0
         try:
             note(f"connecting to {HOST}{PATH} for {' '.join(args.pair)}")
-            stream(args.pair, left)
+            stream(args.pair, left, args.depth)
             if args.seconds is not None:
                 return 0
             raise Closed("the stream ended")

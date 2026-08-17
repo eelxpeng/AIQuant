@@ -277,10 +277,10 @@ pub fn parse_line(
     })?;
     // Checked before the symbol on purpose. A line that is not an event at all
     // should be diagnosed as that, not as an unknown symbol in field two.
-    if kind != "Q" && kind != "T" {
+    if !matches!(kind, "Q" | "T" | "L" | "A") {
         return Err(FeedError::Malformed {
             line: number,
-            reason: "first field must be Q or T",
+            reason: "first field must be Q, T, L or A",
         });
     }
 
@@ -346,6 +346,25 @@ pub fn parse_line(
             };
             MarketKind::Trade { px, qty, aggressor }
         }
+        // One changed level of the book. A run of these is one update and only
+        // becomes visible at the `A` that closes it (ADR, order-book depth).
+        "L" => {
+            let side = match fields.next() {
+                Some("B") => Side::Buy,
+                Some("S") => Side::Sell,
+                _ => {
+                    return Err(FeedError::Malformed {
+                        line: number,
+                        reason: "level side must be B or S",
+                    });
+                }
+            };
+            let px = Px::from_scaled(number_at(fields.next(), "no level price")?);
+            // Zero is not missing: it is how a venue removes a level.
+            let qty = Qty::from_scaled(number_at(fields.next(), "no level quantity")?);
+            MarketKind::Level { side, px, qty }
+        }
+        "A" => MarketKind::BookApplied,
         // Unreachable: the kind was checked above, before the symbol.
         other => unreachable!("unchecked record kind {other:?}"),
     };

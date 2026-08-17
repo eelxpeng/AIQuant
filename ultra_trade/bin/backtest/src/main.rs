@@ -31,6 +31,7 @@ use event::codec::LogHeader;
 use event::{Outbound, Segments};
 use harness::Costs;
 use marketdata::{BarSpec, MarkRule};
+use sim_venue::FillModel;
 
 /// How an open position is valued in the summary.
 ///
@@ -56,6 +57,8 @@ fn usage() -> ! {
     eprintln!("usage: backtest <recorded.log> [session.conf]");
     eprintln!();
     eprintln!("  recorded.log   a session written by `record` or `paper`");
+    eprintln!("  --walk-book    fill through the levels behind the touch, which needs");
+    eprintln!("                 a recording made with a depth feed");
     eprintln!("  session.conf   limits and strategies for this run; without it,");
     eprintln!("                 wide limits and one crossover on the first instrument");
     eprintln!();
@@ -118,7 +121,13 @@ fn default_session(header: &LogHeader, instruments: &[Instrument]) -> SessionCon
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--walk-book` fills an order through the levels behind the touch, which
+    // needs a recording that has them. Off by default: a recording without
+    // depth would be walked into a book of one level and look unchanged, which
+    // reads as "depth made no difference" rather than "there was no depth".
+    let walk = args.iter().any(|a| a == "--walk-book");
+    args.retain(|a| a != "--walk-book");
     let Some(path) = args.first() else { usage() };
     if args.len() > 2 {
         usage();
@@ -175,7 +184,15 @@ fn main() {
         .count();
 
     // One definition of what a backtest is, shared with `sweep` (`harness`).
-    let summary = match harness::backtest(&header, &records, &session, Costs::DEFAULT, MARK_RULE) {
+    let costs = Costs {
+        model: if walk {
+            FillModel::WalkBook
+        } else {
+            FillModel::TouchDisplayed
+        },
+        ..Costs::DEFAULT
+    };
+    let summary = match harness::backtest(&header, &records, &session, costs, MARK_RULE) {
         Ok(summary) => summary,
         Err(e) => fail(&format!("cannot replay {path}"), e),
     };

@@ -35,6 +35,10 @@ pub(super) const VENUE_EXPIRED: u8 = 8;
 pub(super) const VENUE_POSITION: u8 = 9;
 pub(super) const TIMER: u8 = 10;
 pub(super) const COMMAND: u8 = 11;
+/// A single book level (format 2).
+pub(super) const BOOK_LEVEL: u8 = 12;
+/// The end of a book update (format 2).
+pub(super) const BOOK_APPLIED: u8 = 13;
 
 pub(super) const ORDER_SUBMITTED: u8 = 64;
 pub(super) const CANCEL_SUBMITTED: u8 = 65;

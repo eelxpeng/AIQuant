@@ -88,6 +88,30 @@ pub enum MarketKind {
         /// Size at the best ask.
         ask_qty: Qty,
     },
+    /// One price level of the order book changed.
+    ///
+    /// A book update is a run of these followed by [`MarketKind::BookApplied`],
+    /// because ten levels a side does not fit a fixed 80-byte record and the
+    /// fixed size is what makes seeking arithmetic (ADR, order-book depth).
+    ///
+    /// **Nothing downstream sees a level on its own.** Between the first level
+    /// of an update and its completion the book can be crossed — a state the
+    /// venue never published — so the engine holds them until the update is
+    /// whole.
+    Level {
+        /// Which side of the book.
+        side: Side,
+        /// The price of the level.
+        px: Px,
+        /// The size resting there now. **Zero removes the level**, which is
+        /// how the venue says it too.
+        qty: Qty,
+    },
+    /// Every level of the update just before this one is now in force.
+    ///
+    /// The marker that makes a run of levels atomic. Without it a strategy
+    /// could read a book part-way through being rewritten.
+    BookApplied,
     /// A trade printed.
     Trade {
         /// The price it printed at.

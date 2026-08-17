@@ -34,6 +34,12 @@ pub struct Costs {
     pub maker: Px,
     /// Charged per unit on a taking fill.
     pub taker: Px,
+    /// How much of an order the book lets through.
+    ///
+    /// Here rather than in the session config for the same reason as the fees:
+    /// two policies compared over one recording must meet the same venue, or
+    /// the comparison measures the fill model.
+    pub model: FillModel,
 }
 
 impl Costs {
@@ -45,6 +51,10 @@ impl Costs {
     pub const DEFAULT: Costs = Costs {
         maker: Px::ZERO,
         taker: Px::from_scaled(SCALE / 100),
+        // The conservative one. `WalkBook` needs depth in the recording and
+        // silently equals this without it, so defaulting to it would tell some
+        // recordings they were being walked when they were not.
+        model: FillModel::TouchDisplayed,
     };
 }
 
@@ -119,7 +129,7 @@ pub fn backtest(
         HistoricalFeed::from_records(header.clone(), records.to_vec(), Replaying::MarketDataOnly);
     let venue = SimVenue::new(
         instruments.len(),
-        FillModel::TouchDisplayed,
+        costs.model,
         Fees {
             maker: costs.maker,
             taker: costs.taker,
