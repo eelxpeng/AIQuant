@@ -112,7 +112,7 @@ pub struct StrategyConfig {
 /// not overlap: a quoter has no window and a crossover has no half-spread.
 /// Sharing one shape would mean fields that are meaningless for the strategy
 /// in hand, and a config could then set one and be silently ignored.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrategyKind {
     /// Takes liquidity when a fast average crosses a slow one.
     Crossover {
@@ -177,6 +177,114 @@ impl StrategyConfig {
                 max_inventory,
             )),
         }
+    }
+
+    /// The same strategy with one setting replaced.
+    ///
+    /// For a sweep, which varies a parameter across runs. The setting is named
+    /// exactly as the config file names it, and a name this kind does not take
+    /// is **refused** — silently ignoring it would report a grid of runs that
+    /// were all secretly identical, which is worse than no grid at all.
+    pub fn with(&self, key: &str, value: &str) -> Result<StrategyConfig, ConfigError> {
+        let scaled = || {
+            types::parse_scaled(value)
+                .map_err(|e| ConfigError::whole(format!("{key} {value:?}: {e}")))
+        };
+        let count = || {
+            value.parse::<u32>().map_err(|_| {
+                ConfigError::whole(format!("{key} wants a whole number, got {value:?}"))
+            })
+        };
+
+        let kind = match (self.kind, key) {
+            (StrategyKind::Crossover { size, bars, .. }, "window") => StrategyKind::Crossover {
+                window: count()? as usize,
+                size,
+                bars,
+            },
+            (StrategyKind::Crossover { window, bars, .. }, "size") => StrategyKind::Crossover {
+                window,
+                size: Qty::from_scaled(scaled()?),
+                bars,
+            },
+            (StrategyKind::Crossover { window, size, .. }, "bars") => StrategyKind::Crossover {
+                window,
+                size,
+                bars: BarSpec::Tick {
+                    threshold: count()?,
+                },
+            },
+            (
+                StrategyKind::Quote {
+                    size,
+                    reprice,
+                    max_inventory,
+                    ..
+                },
+                "half-spread",
+            ) => StrategyKind::Quote {
+                half_spread: Px::from_scaled(scaled()?),
+                size,
+                reprice,
+                max_inventory,
+            },
+            (
+                StrategyKind::Quote {
+                    half_spread,
+                    reprice,
+                    max_inventory,
+                    ..
+                },
+                "size",
+            ) => StrategyKind::Quote {
+                half_spread,
+                size: Qty::from_scaled(scaled()?),
+                reprice,
+                max_inventory,
+            },
+            (
+                StrategyKind::Quote {
+                    half_spread,
+                    size,
+                    max_inventory,
+                    ..
+                },
+                "reprice",
+            ) => StrategyKind::Quote {
+                half_spread,
+                size,
+                reprice: Px::from_scaled(scaled()?),
+                max_inventory,
+            },
+            (
+                StrategyKind::Quote {
+                    half_spread,
+                    size,
+                    reprice,
+                    ..
+                },
+                "max-inventory",
+            ) => StrategyKind::Quote {
+                half_spread,
+                size,
+                reprice,
+                max_inventory: Qty::from_scaled(scaled()?),
+            },
+            (kind, other) => {
+                return Err(ConfigError::whole(format!(
+                    "{other:?} is not a setting {} takes",
+                    match kind {
+                        StrategyKind::Crossover { .. } => "crossover",
+                        StrategyKind::Quote { .. } => "quote",
+                    }
+                )));
+            }
+        };
+        Ok(StrategyConfig {
+            instrument: self.instrument,
+            symbol: self.symbol.clone(),
+            kind,
+        })
     }
 
     /// A one-line description, for a session banner.

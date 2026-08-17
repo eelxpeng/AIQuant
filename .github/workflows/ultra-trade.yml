@@ -186,6 +186,23 @@ jobs:
           cargo run -p journal --locked --offline -- "$paper_log" | grep -q "TOTAL"
           cargo run -p journal --locked --offline -- "$paper_log" | grep -q "marked at"
 
+          # A sweep over the recording: a grid of variants, split in and out of
+          # sample. The nag when there is no split is load-bearing, so it is
+          # checked too — a sweep whose top row gets picked with no
+          # out-of-sample column is how a strategy gets overfitted.
+          cargo run -p sweep --locked --offline -- "$log" "$conf" \
+            --vary SMOKE.window=5,10,20 --split 0.7 > "${RUNNER_TEMP:-/tmp}/sweep.txt"
+          grep -q "in sample" "${RUNNER_TEMP:-/tmp}/sweep.txt"
+          grep -q "out of sample" "${RUNNER_TEMP:-/tmp}/sweep.txt"
+          cargo run -p sweep --locked --offline -- "$log" "$conf" \
+            --vary SMOKE.window=5,10 | grep -q "No out-of-sample split"
+          # A setting the strategy does not take must be refused, not ignored.
+          if cargo run -p sweep --locked --offline -- "$log" "$conf" \
+               --vary SMOKE.half-spread=1 2>/dev/null; then
+            echo "sweep accepted a setting crossover does not take" >&2
+            exit 1
+          fi
+
   repeatability:
     name: allocation counter, 20 runs
     runs-on: ubuntu-latest

@@ -26,10 +26,10 @@
 //! to limits wide enough not to bind by accident and one crossover on the first
 //! instrument.
 
-use config::{SessionConfig, StrategyConfig, StrategyKind};
-use engine::{Engine, EngineConfig, run};
+use config::{InstrumentConfig, SessionConfig, StrategyConfig, StrategyKind};
+use event::codec::LogHeader;
 use event::{Outbound, Segments};
-use historical::{HistoricalFeed, Replaying};
+use harness::Costs;
 use marketdata::{BarSpec, MarkRule};
 
 /// How an open position is valued in the summary.
@@ -39,10 +39,8 @@ use marketdata::{BarSpec, MarkRule};
 /// long is never flattered; a short is valued the other way and the direction
 /// is stated rather than assumed.
 const MARK_RULE: MarkRule = MarkRule::Mid(types::RoundDir::Down);
-use report::summarize;
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
-use types::{ExchangeSpan, Instrument, Notional, OrderId, Px, Qty, SCALE, StrategyId};
+use types::{ExchangeSpan, Instrument, Notional, Qty, SCALE};
 
 const STEP_NANOS: i128 = 1_000_000_000;
 
@@ -71,6 +69,54 @@ fn fail(context: &str, e: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+/// Wide limits and one crossover, for a run with no config.
+///
+/// Deliberately wide enough not to bind by accident: a limit that refused
+/// orders here would make the run look like a strategy decision when it was a
+/// default nobody chose.
+fn default_session(header: &LogHeader, instruments: &[Instrument]) -> SessionConfig {
+    let mut limits = LimitBook::with_instruments(instruments.len());
+    for instrument in instruments {
+        limits
+            .set(
+                instrument.id(),
+                Limits {
+                    max_position: qty(1_000),
+                    max_exposure: money(10_000_000),
+                    max_order_notional: money(1_000_000),
+                    max_orders_in_window: 60,
+                    rate_window: ExchangeSpan::from_nanos(STEP_NANOS * 60),
+                    max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 30),
+                },
+            )
+            .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
+    }
+    let entries: Vec<InstrumentConfig> = header
+        .instruments
+        .iter()
+        .zip(instruments)
+        .map(|(entry, instrument)| InstrumentConfig {
+            symbol: entry.symbol_str().unwrap_or("?").to_string(),
+            id: entry.id,
+            instrument: *instrument,
+        })
+        .collect();
+    let first = &entries[0];
+    SessionConfig {
+        strategies: vec![StrategyConfig {
+            instrument: first.id,
+            symbol: first.symbol.clone(),
+            kind: StrategyKind::Crossover {
+                window: 20,
+                size: qty(1),
+                bars: BarSpec::Tick { threshold: 1 },
+            },
+        }],
+        instruments: entries,
+        limits,
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(path) = args.first() else { usage() };
@@ -96,104 +142,42 @@ fn main() {
         fail("the recording has no instruments", "nothing to trade");
     }
 
-    // Limits and strategies are this run's policy.
-    let session = args.get(1).map(|conf| {
-        SessionConfig::load(conf).unwrap_or_else(|e| fail(&format!("cannot read {conf}"), e))
-    });
-    let (limits, strategies) = match &session {
-        Some(session) => {
-            if session.instruments.len() != instruments.len() {
-                fail(
-                    "the config and the recording disagree",
-                    format!(
-                        "the recording holds {} instruments, the config declares {}",
-                        instruments.len(),
-                        session.instruments.len()
-                    ),
-                );
-            }
-            (session.limits.clone(), session.strategies.clone())
+    // Limits and strategies are this run's policy, not a property of the
+    // market that was recorded.
+    let session = match args.get(1) {
+        Some(conf) => {
+            SessionConfig::load(conf).unwrap_or_else(|e| fail(&format!("cannot read {conf}"), e))
         }
-        None => {
-            let mut limits = LimitBook::with_instruments(instruments.len());
-            for instrument in &instruments {
-                limits
-                    .set(
-                        instrument.id(),
-                        Limits {
-                            max_position: qty(1_000),
-                            max_exposure: money(10_000_000),
-                            max_order_notional: money(1_000_000),
-                            max_orders_in_window: 60,
-                            rate_window: ExchangeSpan::from_nanos(STEP_NANOS * 60),
-                            max_quote_age: ExchangeSpan::from_nanos(STEP_NANOS * 30),
-                        },
-                    )
-                    .unwrap_or_else(|e| fail("limits", format!("{e:?}")));
-            }
-            let first = &header.instruments[0];
-            (
-                limits,
-                vec![StrategyConfig {
-                    instrument: first.id,
-                    symbol: first.symbol_str().unwrap_or("?").to_string(),
-                    kind: StrategyKind::Crossover {
-                        window: 20,
-                        size: qty(1),
-                        bars: BarSpec::Tick { threshold: 1 },
-                    },
-                }],
-            )
-        }
+        None => default_session(&header, &instruments),
     };
 
-    // The two bindings that make this a backtest.
-    let mut feed = match HistoricalFeed::open(path, &instruments, Replaying::MarketDataOnly) {
-        Ok(feed) => feed,
-        Err(e) => fail(&format!("cannot replay {path}"), e),
+    let (records, recovery) = match Segments::read_all(std::path::Path::new(path)) {
+        Ok(pair) => pair,
+        Err(e) => fail(&format!("cannot read {path}"), e),
     };
-    let venue = SimVenue::new(
-        instruments.len(),
-        FillModel::TouchDisplayed,
-        Fees {
-            maker: Px::ZERO,
-            taker: Px::from_scaled(SCALE / 100), // 0.01 per unit
-        },
-        ExchangeSpan::from_nanos(0),
-    );
+    if !recovery.is_clean() {
+        fail(&format!("cannot replay {path}"), recovery);
+    }
 
-    let recorded_by_the_session = feed.recorded_decisions().to_vec();
+    // What the recording itself decided, for the comparison at the end.
+    let recorded_by_the_session: Vec<Outbound> = records
+        .iter()
+        .filter_map(|r| r.event.as_outbound().copied())
+        .collect();
     let recorded_decisions = recorded_by_the_session.len();
     let recorded_orders = recorded_by_the_session
         .iter()
         .filter(|o| matches!(o, Outbound::OrderSubmitted { .. }))
         .count();
-    let market_events = feed.len();
+    let market_events = records
+        .iter()
+        .filter(|r| matches!(r.event, event::Event::In(event::Inbound::Market(_))))
+        .count();
 
-    let config = EngineConfig::new(
-        instruments.clone(),
-        limits,
-        OrderId::new(0),
-        header.session_start,
-    );
-    let mut engine = Engine::new(config, venue, event::MemoryLog::with_capacity(1 << 16));
-    for (index, spec) in strategies.iter().enumerate() {
-        let strategy = spec.build(StrategyId::new(index as u16), |aggregator| {
-            engine.add_aggregator(aggregator)
-        });
-        engine
-            .add_strategy(strategy)
-            .unwrap_or_else(|e| fail("strategy", format!("{e:?}")));
-    }
-
-    if let Err(e) = run(&mut feed, &mut engine) {
-        eprintln!("backtest: session stopped: {e:?}");
-        std::process::exit(1);
-    }
-
-    let summary = match summarize(engine.log().records(), instruments.len(), MARK_RULE) {
+    // One definition of what a backtest is, shared with `sweep` (`harness`).
+    let summary = match harness::backtest(&header, &records, &session, Costs::DEFAULT, MARK_RULE) {
         Ok(summary) => summary,
-        Err(e) => fail("cannot summarize the run", format!("{e:?}")),
+        Err(e) => fail(&format!("cannot replay {path}"), e),
     };
 
     println!("backtest over {path}");
@@ -236,7 +220,7 @@ fn main() {
     // Per instrument, because that is the only level at which two strategies
     // can be compared: a session total hides which one earned it.
     for entry in &header.instruments {
-        let position = engine.positions().get(entry.id).expect("configured");
+        let position = summary.positions.get(entry.id).expect("configured");
         let index = entry.id.raw() as usize;
         match summary
             .valuation

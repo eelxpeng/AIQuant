@@ -35,6 +35,10 @@ graph LR
 | `paper` | **live** | simulated | trade a real market with no money at risk |
 | *`live`* | live | **real** | not built — it is `paper` with the venue swapped |
 
+`sweep` runs `backtest` many times over one recording and ranks the results
+(§7b). Both go through `harness`, so there is one definition of what a backtest
+*is* rather than two that can drift on fees or the mark rule.
+
 A fourth binary, `journal`, binds nothing: it reads a recording back and says
 what happened (§6).
 
@@ -191,9 +195,10 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `report` | log → PnL marked to market, drawdown, refusals | engine internals |
 | `config` | the session file — instruments, limits, strategies | the engine, the log, any I/O beyond reading one file |
 | `recovery` | bringing a crashed session back, and refusing to when it does not add up | feeds, clocks, which venue is bound |
+| `harness` | one configured run over a recording, and splitting one | which tool asked for it |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**24,300 lines, 440 tests, zero third-party dependencies** in the trading path.
+**25,400 lines, 450 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -406,6 +411,41 @@ instrument, rather than asserted.
 An earlier single-instrument session, before the config existed, showed the
 same thing on one book: 80 orders each side, one `StaleMarketData` refusal each
 side, −16.60 − 1.49 = −18.09.
+
+---
+
+## 7b. Choosing between configurations, without fooling yourself
+
+```bash
+sweep session.log base.conf --vary BTCUSD.half-spread=0.25,0.5,0.75 --split 0.7
+```
+
+Runs the grid, ranks it by what each variant was **worth** (total, not realized
+— a run still holding a position has not finished), and prints an
+out-of-sample column beside the in-sample one.
+
+That second column is the whole point. **Picking the top row of a sweep is how
+strategies get overfitted**: run enough variants over one recording and the
+winner is partly measuring the noise in that particular stretch. The tool
+cannot prevent that, so it makes it visible — and when the ranking rearranges
+it says so:
+
+```text
+!! The ranking rearranged. In sample the best was half-spread=0.5; out of
+!! sample it returned 8.945 and half-spread=0.4 did better.
+```
+
+That is a real run of this tool, not an illustration. A sweep with no `--split`
+prints a paragraph explaining why the table it just printed should not be
+trusted on its own.
+
+The split is by **market event**, not record index: decisions and venue reports
+cluster around active moments, so cutting on record count would hand the busier
+half of the session to whichever side had more trading in it.
+
+**What it is not.** One split is one experiment. A parameter that survives six
+consecutive train/test windows is a different quality of evidence, and rolling
+walk-forward is not built.
 
 ---
 

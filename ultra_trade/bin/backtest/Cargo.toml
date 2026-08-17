@@ -16,3 +16,4 @@ engine = { path = "../../crates/engine" }
 sim_venue = { path = "../../crates/adapters/sim" }
 historical = { path = "../../crates/adapters/historical" }
 report = { path = "../../crates/report" }
+harness = { path = "../../crates/harness" }

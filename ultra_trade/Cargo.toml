@@ -10,6 +10,7 @@ members = [
     "crates/simkit",
     "crates/report",
     "crates/recovery",
+    "crates/harness",
     "crates/config",
     "crates/adapters/sim",
     "crates/adapters/historical",
@@ -18,6 +19,7 @@ members = [
     "bin/paper",
     "bin/backtest",
     "bin/journal",
+    "bin/sweep",
 ]
 resolver = "3"
 
