@@ -44,6 +44,20 @@ use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
 /// How often the session says what it is doing.
 const STATUS_EVERY: Duration = Duration::from_secs(5);
 
+/// Prints a line, and does not die if nobody is listening.
+///
+/// `println!` panics when stdout is closed, which for a long-running session
+/// means `paper | head` kills a live trade. A reader going away is not a
+/// trading problem: the recording is the record, and the console is a
+/// convenience. So the line is dropped and the session carries on.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, $($arg)*);
+    }};
+}
+
 fn usage() -> ! {
     eprintln!("usage: paper <session.conf> <market-source> <output.log>");
     eprintln!();
@@ -210,11 +224,11 @@ fn main() {
         None
     };
 
-    println!("paper session from {config_path}");
-    println!("  market source  {source_path}");
-    println!("  recording to   {log_path}");
+    say!("paper session from {config_path}");
+    say!("  market source  {source_path}");
+    say!("  recording to   {log_path}");
     for i in &session.instruments {
-        println!(
+        say!(
             "  instrument     {} (id {})  tick {}  lot {}",
             i.symbol,
             i.id.raw(),
@@ -222,35 +236,35 @@ fn main() {
             i.instrument.lot()
         );
     }
-    println!("  strategies     {}", session.strategies.len());
+    say!("  strategies     {}", session.strategies.len());
     if let Some(recovered) = &recovered {
-        println!(
+        say!(
             "  RESUMED        after a crash, from {} records",
             recovered.records
         );
         if !recovered.recovery.is_clean() {
-            println!(
+            say!(
                 "                 {} — the tail was lost",
                 recovered.recovery
             );
         }
         for position in recovered.from_log.iter() {
             if !position.is_flat() {
-                println!(
+                say!(
                     "                 holding {} of instrument {}",
                     position.qty(),
                     position.instrument().raw()
                 );
             }
         }
-        println!("  state          HALTED — type `resume` to trade again");
+        say!("  state          HALTED — type `resume` to trade again");
     }
     match (&command_path, source_path.as_str()) {
-        (Some(path), _) => println!("  commands       {path} — halt | resume | kill | flatten"),
-        (None, "-") => println!("  commands       disabled (stdin is the market source)"),
-        (None, _) => println!("  commands       stdin — halt | resume | kill | flatten"),
+        (Some(path), _) => say!("  commands       {path} — halt | resume | kill | flatten"),
+        (None, "-") => say!("  commands       disabled (stdin is the market source)"),
+        (None, _) => say!("  commands       stdin — halt | resume | kill | flatten"),
     }
-    println!();
+    say!();
 
     // The pump, written here rather than using `engine::run`, so the session
     // can say what it is doing while it runs. It is the same three steps.
@@ -274,7 +288,7 @@ fn main() {
         // Anything new is worth seeing as it happens.
         while reported_orders < engine.orders().len() {
             if let Some(order) = engine.orders().iter().nth(reported_orders) {
-                println!(
+                say!(
                     "  order {} {:?} {} @ {:?}",
                     order.id(),
                     order.side(),
@@ -295,7 +309,7 @@ fn main() {
                     format!("{} {}", i.symbol, p.qty())
                 })
                 .collect();
-            println!(
+            say!(
                 "  [{:?}] {} events, {} orders, {}",
                 engine.state(),
                 feed.market_events(),
@@ -305,7 +319,7 @@ fn main() {
         }
 
         if engine.state() == EngineState::Killed {
-            println!("  killed; stopping");
+            say!("  killed; stopping");
             break;
         }
     }
@@ -319,30 +333,31 @@ fn main() {
     let commands_seen = feed.commands_seen();
     let orders = engine.orders().len();
 
-    println!();
-    println!("session over");
-    println!("  market events   {market_events}");
-    println!("  commands        {commands_seen}");
-    println!("  orders          {orders}");
+    say!();
+    say!("session over");
+    say!("  market events   {market_events}");
+    say!("  commands        {commands_seen}");
+    say!("  orders          {orders}");
     for i in &session.instruments {
         let p = engine.positions().get(i.id).expect("configured");
-        println!(
+        say!(
             "  {:<14}  realized {}  position {}",
             i.symbol,
             p.realized(),
             p.qty()
         );
     }
-    println!("  final state     {state:?}");
+    say!("  final state     {state:?}");
 
     // Persist and say whether it worked, rather than dropping the answer.
     match engine.into_log().shutdown() {
         Ok(report) => {
-            println!("  recorded        {} records to {log_path}", report.written);
+            say!("  recorded        {} records to {log_path}", report.written);
             if report.high_water * 2 > report.capacity {
-                println!(
+                say!(
                     "  WARNING         the log ring reached {} of {} — a slower disk would have halted the session",
-                    report.high_water, report.capacity
+                    report.high_water,
+                    report.capacity
                 );
             }
         }
