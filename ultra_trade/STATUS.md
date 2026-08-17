@@ -40,7 +40,7 @@ ticks when it works end to end from a command line, not when its parts compile.
       with the failures that only appear at that timescale.
 - [ ] **12 · Live.** Real orders, real money.
 
-Rungs 1–8 took PRs #7 to #33. Rung 12 is deliberately far away and nothing
+Rungs 1–8 took PRs #7 to #34. Rung 12 is deliberately far away and nothing
 below should be read as saying otherwise.
 
 ---
@@ -81,6 +81,26 @@ Everything today is a terminal and a text file. This is the largest single gap
 by user-visible surface, and it absorbs the `client` process outstanding since
 the architecture doc was written.
 
+- [x] **The contract, written first** (#34,
+      `adr/1-operator-ui-contract.md`). What the UI may read, what it may
+      write, and what a disconnect means per command.
+
+**Two prerequisites the ADR turned up.** Neither is large; both block
+everything under them and should land separately, with their own tests:
+
+- [ ] **`journal --json` and `sweep --json`.** Every tool prints aligned text
+      for a human today, and a UI parsing that breaks the first time a column
+      moves. This is the seam the whole design rests on (ADR D-2).
+- [ ] **`paper --commands <path>`.** Commands are read from the terminal that
+      launched the process, so no other program can send one — the operator
+      console is impossible until this exists. A named pipe also removes the
+      current limitation that commands are disabled entirely when the market
+      source is stdin.
+- [ ] **A way to tell a live session from a finished one**, so the viewer knows
+      whether to keep polling.
+
+Then, in order:
+
 - [ ] **A read-only web view of a recording.** Equity curve, fills, refusals,
       the book at a chosen moment, feed-lag distribution. `journal` already
       derives all of it; this is presentation, and it is where a person would
@@ -95,16 +115,19 @@ the architecture doc was written.
       `client` process. The one part that **writes**, so the part to build last
       and most carefully.
 
-**The architectural constraint, decided in advance.** A web server does not go
-in the Rust workspace. The trading path has zero third-party dependencies and a
-UI is not a reason to acquire the first one — the same rule that keeps the venue
-bridges in `tools/`. The seam already exists: a recording is a file with a
-documented format and `journal` already turns it into numbers, so the UI reads
-that. For the console, the line protocol on stdin is already the control
-surface; a UI writes to it rather than reaching into the engine.
+**The rules, from the ADR.** The UI is not in the Rust workspace and never
+decodes the log itself — it calls `journal`, because a second decoder of a
+format that has bumped twice this month would be wrong quietly rather than
+loudly. Viewing and controlling are **two programs**, so the thing left open on
+a second monitor all day is not the thing that can flatten a book. A command is
+**pending until it appears in the recording**, because a write returning tells
+you the line was written and not that the engine acted. And the UI can never
+change a risk limit: that is an edit to a config and a restart, which leaves a
+reviewable artefact behind.
 
-Wants an ADR before code, like the crash-recovery contract: what the UI may
-read, what it may write, and what happens when it disconnects mid-command.
+Flatten is the one command a UI must not auto-retry on a disconnect — it is the
+only one that is not idempotent, and doubling it is worst in exactly the moment
+somebody reaches for it.
 
 ### 3 · Research quality
 
