@@ -79,6 +79,9 @@ The bridge speaks HTTPS and JSON; the trading system speaks one line per event:
 ```text
 Q <symbol> <exchange_nanos> <bid_px> <bid_qty> <ask_px> <ask_qty>
 T <symbol> <exchange_nanos> <px> <qty> <B|S>
+L <symbol> <exchange_nanos> <B|S> <px> <qty>     one book level; qty 0 removes it
+A <symbol> <exchange_nanos>                      the levels above are now in force
+R <symbol> <exchange_nanos>                      discard the book, a snapshot follows
 ```
 
 **Why the seam is there.** Every venue's wire format is different, so a
@@ -215,7 +218,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `harness` | one configured run over a recording, and splitting one | which tool asked for it |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**26,600 lines, 478 tests, zero third-party dependencies** in the trading path.
+**27,000 lines, 483 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -438,6 +441,25 @@ synthetic book with 2 at the touch and 8 behind it, a strategy asking for 5:
 The old model is not merely optimistic — under it the strategy **could not
 execute at all**, so it re-ordered the shortfall forty-nine times and the
 backtest was quietly measuring a smaller strategy than the one configured.
+
+**A wrong book is caught, not carried.** Depth is a stream of deltas, so one
+dropped update leaves a book that is *quietly* wrong — plausible prices,
+incorrect sizes, and a fill model that walks them without complaint. Venues
+publish a checksum for exactly this, and the bridge keeps its own copy of the
+book to check against it:
+
+```text
+  book resets        1                    the subscription opening: ordinary
+  !! BOOK RESYNCS    1 — the venue caught a wrong book that many times
+```
+
+The check lives in the bridge because the algorithm is venue-specific down to
+how many digits a price is formatted with — putting it in the Rust path would
+drag Kraken's conventions into a real-money binary. When it fails the bridge
+resynchronises, and the `R` line that opens the fresh snapshot tells the engine
+to discard everything it holds, including any half-built update. A reset that
+arrives *after* data has flowed is counted separately, because only that one
+means decisions were taken against a book that was wrong.
 
 **What it still does not buy**, because depth invites the belief that a
 backtest is now realistic: market impact (the book would not have sat still

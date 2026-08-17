@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — it is the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **26,600 lines, 478 tests, 15 crates, 5 binaries, zero third-party
+Today: **27,000 lines, 483 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path.
 
 ---
@@ -41,7 +41,7 @@ exist.
       for a long time without surprises, and this repository has never held a
       credential — where a key lives is undecided and is a prerequisite.
 
-Rungs 1–8 took PRs #7 to #31. Rung 9 is deliberately far away, and
+Rungs 1–8 took PRs #7 to #32. Rung 9 is deliberately far away, and
 nothing below should be read as saying it is close.
 
 ---
@@ -157,8 +157,11 @@ Ordered by what I would do next, not by size.
       has no budget to cite against.
 - [x] **Order-book depth** — the feed, the log, the book and a fill model that
       walks it (#31, ADR `1-order-book-depth.md`)
-- [ ] Book checksums. Kraken publishes one per update and this ignores it, so a
-      dropped delta leaves a book that is quietly wrong rather than refused.
+- [x] **Book checksums** — the bridge verifies the venue's CRC over its own
+      copy of the book and resynchronises when it fails; the reset is recorded
+      and counted (#32)
+- [ ] The checksum is Kraken's, in the bridge. A second venue needs its own,
+      because the algorithm is venue-specific down to the digit formatting.
 
 ### Towards live — rung 9
 

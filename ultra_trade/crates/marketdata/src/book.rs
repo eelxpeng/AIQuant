@@ -281,6 +281,8 @@ pub struct Books {
     pending: Vec<(InstrumentId, Side, Px, Qty)>,
     /// Updates refused for carrying more levels than the buffer holds.
     overflowed: u64,
+    /// Books thrown away because the venue said ours was wrong.
+    resets: u64,
 }
 
 impl Books {
@@ -309,6 +311,7 @@ impl Books {
                 .collect(),
             pending: Vec::with_capacity(pending),
             overflowed: 0,
+            resets: 0,
         }
     }
 
@@ -320,6 +323,17 @@ impl Books {
             Side::Buy => self.bids.get(index),
             Side::Sell => self.asks.get(index),
         }
+    }
+
+    /// Times a book was discarded and rebuilt from a fresh snapshot.
+    ///
+    /// Each one is an update this session got wrong and the venue caught. Zero
+    /// is the number to expect; anything else is a feed, or a bridge, to look
+    /// at — and it means some earlier decisions were made against a book that
+    /// did not match the venue's.
+    #[inline]
+    pub const fn book_resets(&self) -> u64 {
+        self.resets
     }
 
     /// Book updates refused for carrying more levels than the buffer holds.
@@ -369,6 +383,10 @@ impl Books {
             // checking each against the last would refuse the update's own
             // second level.
             MarketKind::Level { .. } => None,
+            // A reset is not ordered against the book it is discarding: the
+            // whole point is that the book was wrong, so its timestamp is not
+            // evidence of anything.
+            MarketKind::BookReset => None,
             MarketKind::BookApplied => self.tops[index].map(|t| t.exchange_time),
         };
         if let Some(stored) = stored
@@ -411,6 +429,15 @@ impl Books {
                     return Applied::UpdateTooLarge;
                 }
                 self.pending.push((ev.instrument, side, px, qty));
+            }
+            MarketKind::BookReset => {
+                // Everything, including any half-built update in the buffer:
+                // those levels belong to the book being thrown away.
+                self.pending.clear();
+                self.bids[index].clear();
+                self.asks[index].clear();
+                self.tops[index] = None;
+                self.resets = self.resets.saturating_add(1);
             }
             MarketKind::BookApplied => {
                 let mut full = false;

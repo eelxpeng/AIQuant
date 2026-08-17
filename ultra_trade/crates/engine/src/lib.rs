@@ -464,7 +464,9 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
                     });
                 }
             }
-            MarketKind::Level { .. } => {}
+            // A reset leaves no book, so there is no top to dispatch. The
+            // snapshot that follows it will produce one.
+            MarketKind::Level { .. } | MarketKind::BookReset => {}
             MarketKind::Trade { px, qty, aggressor } => {
                 self.dispatch_all(&StrategyEvent::Trade {
                     instrument: m.instrument,

@@ -194,6 +194,10 @@ jobs:
           depth_md="${RUNNER_TEMP:-/tmp}/smoke-depth.txt"
           depth_log="${RUNNER_TEMP:-/tmp}/smoke-depth.log"
           rm -f "$depth_md" "${depth_log%.log}".*.log
+          # The bridge's own logic, with no network: a real checksum vector, the
+          # timestamp parser against `datetime`, and the delta bookkeeping.
+          python3 ultra_trade/tools/test-kraken-stream.py
+
           # A delta feed: each update removes the levels it replaces. A fixture
           # that only ever adds accumulates prices until the book is crossed,
           # which the gate then refuses as having no usable market data — a real
@@ -214,10 +218,21 @@ jobs:
             echo "L SMOKE $t S $((p + 2)).00 8"
             echo "A SMOKE $t"
             echo "T SMOKE $((t + 50000000)) $p.50 1 B"
-            prev=$p
+            # Halfway through, a resynchronisation: the book is thrown away and
+            # rebuilt, as it would be when a checksum fails.
+            if [ "$i" = "60" ]; then
+              echo "R SMOKE $t"
+              prev=""
+            else
+              prev=$p
+            fi
           done > "$depth_md"
           cargo run -p paper --locked --offline -- "$conf" "$depth_md" "$depth_log" < /dev/null > /dev/null
           cargo run -p journal --locked --offline -- "$depth_log" --all | grep -q "book update applied"
+          cargo run -p journal --locked --offline -- "$depth_log" --all | grep -q "book reset"
+          # A session that reset mid-stream must keep trading afterwards, so the
+          # reset has to leave a usable book rather than an empty one.
+          cargo run -p journal --locked --offline -- "$depth_log" | grep -q "BOOK RESYNCS"
           # Walking the book must reach a size the touch model cannot, which is
           # the entire reason depth exists.
           # An order for 5 against a touch of 2 completes only if it can walk.

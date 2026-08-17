@@ -41,6 +41,7 @@ import socket
 import ssl
 import struct
 import sys
+import zlib
 import time
 
 HOST = "ws.kraken.com"
@@ -177,6 +178,49 @@ def note(message):
     print(f"# {message}", file=sys.stderr, flush=True)
 
 
+# --------------------------------------------------------------- checksums
+
+
+def field(text, precision):
+    """A level's price or quantity as the checksum wants it.
+
+    Fixed number of decimals, decimal point removed, leading zeros stripped.
+    Done on the venue's own decimal text rather than a float, because the
+    checksum is over the exact digits it published and a round trip through a
+    double changes them.
+    """
+    whole, _, frac = text.partition(".")
+    frac = (frac + "0" * precision)[:precision]
+    return (whole + frac).lstrip("0") or "0"
+
+
+def book_checksum(book, price_precision, qty_precision):
+    """Kraken's CRC32 over the top ten of each side, asks first.
+
+    Verified against 490 consecutive live updates with no mismatch before this
+    was relied on for anything — an incorrect implementation would report the
+    book as broken on every message and resynchronise for ever.
+    """
+    parts = []
+    for side in ("asks", "bids"):
+        for level in book[side][:10]:
+            parts.append(field(level["price"], price_precision))
+            parts.append(field(level["qty"], qty_precision))
+    return zlib.crc32("".join(parts).encode())
+
+
+def apply_levels(book, key, updates):
+    """Folds one side's deltas in. A quantity of zero removes the level."""
+    side = book[key]
+    for update in updates:
+        price = update["price"]
+        side[:] = [level for level in side if level["price"] != price]
+        if update["qty"] != "0" and float(update["qty"]) > 0:
+            side.append(update)
+    side.sort(key=lambda level: float(level["price"]), reverse=(key == "bids"))
+    del side[10:]
+
+
 def symbol_of(pair):
     """`BTC/USD` to `BTCUSD`, which is what a session config declares."""
     return pair.replace("/", "")
@@ -187,6 +231,11 @@ def stream(pairs, seconds, depth=0):
     ws = Socket(HOST, PATH, timeout=30)
     try:
         if depth > 0:
+            # The precisions the checksum is computed at. Without them the
+            # check cannot run, and it is skipped rather than guessed.
+            ws.send(
+                json.dumps({"method": "subscribe", "params": {"channel": "instrument"}})
+            )
             # Depth supersedes the ticker: the book's top follows from its
             # levels, so subscribing to both would set the same top twice.
             ws.send(
@@ -227,6 +276,10 @@ def stream(pairs, seconds, depth=0):
         # last one seen rather than being stamped with a local clock — a receive
         # time in an exchange-time field is the mixing the types forbid.
         last_seen = 0
+        # Our copy of each book, kept only so the venue's checksum can be
+        # checked against it. Nothing downstream reads it.
+        books = {}
+        precisions = {}
         for text in ws.texts():
             if deadline is not None and time.time() > deadline:
                 return
@@ -245,10 +298,25 @@ def stream(pairs, seconds, depth=0):
                         )
                     )
             elif channel == "book":
+                snapshot = message.get("type") == "snapshot"
                 for row in message.get("data", []):
-                    symbol = symbol_of(row["symbol"])
+                    pair = row["symbol"]
+                    symbol = symbol_of(pair)
                     stamp = nanos(row["timestamp"]) if "timestamp" in row else last_seen
                     last_seen = stamp
+
+                    book = books.setdefault(pair, {"bids": [], "asks": []})
+                    if snapshot:
+                        # A snapshot replaces the book, so anything downstream
+                        # is holding must go first. The same line covers a first
+                        # subscription and a resynchronisation, which means
+                        # neither can leave a stale level behind.
+                        book["bids"].clear()
+                        book["asks"].clear()
+                        emit(f"R {symbol} {stamp}")
+                    apply_levels(book, "bids", row.get("bids", []))
+                    apply_levels(book, "asks", row.get("asks", []))
+
                     # One line per changed level, then the marker that puts the
                     # whole update in force. Nothing downstream may act on half
                     # of it (ADR, order-book depth D-2).
@@ -260,6 +328,22 @@ def stream(pairs, seconds, depth=0):
                                 )
                             )
                     emit(f"A {symbol} {stamp}")
+
+                    # The venue's own opinion of whether our book is right. A
+                    # depth feed is deltas, so one dropped update leaves a book
+                    # that is quietly wrong — plausible prices, incorrect sizes,
+                    # and a fill model that walks them without complaint.
+                    want = row.get("checksum")
+                    precision = precisions.get(pair)
+                    if want is None or precision is None:
+                        continue
+                    got = book_checksum(book, precision[0], precision[1])
+                    if got != want:
+                        note(
+                            f"{symbol} book checksum {got} != {want}; "
+                            f"resynchronising"
+                        )
+                        return "resync"
             elif channel == "trade":
                 if message.get("type") == "snapshot":
                     # Kraken opens a trade subscription with its recent history.
@@ -277,6 +361,12 @@ def stream(pairs, seconds, depth=0):
                             row["qty"],
                             "B" if row["side"] == "buy" else "S",
                         )
+                    )
+            elif channel == "instrument":
+                for pair in message.get("data", {}).get("pairs", []):
+                    precisions[pair["symbol"]] = (
+                        int(pair["price_precision"]),
+                        int(pair["qty_precision"]),
                     )
             elif channel == "status":
                 for row in message.get("data", []):
@@ -317,7 +407,13 @@ def main():
                 return 0
         try:
             note(f"connecting to {HOST}{PATH} for {' '.join(args.pair)}")
-            stream(args.pair, left, args.depth)
+            why = stream(args.pair, left, args.depth)
+            if why == "resync":
+                # Reconnecting is the bluntest resynchronisation and the one
+                # with no edge cases: the fresh subscription opens with a
+                # snapshot, which downstream already treats as a reset.
+                attempts = 0
+                continue
             if args.seconds is not None:
                 return 0
             raise Closed("the stream ended")

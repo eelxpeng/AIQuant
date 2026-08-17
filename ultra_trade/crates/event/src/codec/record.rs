@@ -96,6 +96,7 @@ fn kind_and_flags(event: &Event) -> (u8, u8) {
                 MarketKind::Trade { .. } => TRADE,
                 MarketKind::Level { .. } => BOOK_LEVEL,
                 MarketKind::BookApplied => BOOK_APPLIED,
+                MarketKind::BookReset => BOOK_RESET,
             },
             0,
         ),
@@ -147,7 +148,7 @@ fn write_payload(event: &Event, w: &mut Writer<'_>) {
                     w.i64(px.to_scaled());
                     w.i64(qty.to_scaled());
                 }
-                MarketKind::BookApplied => {}
+                MarketKind::BookApplied | MarketKind::BookReset => {}
                 MarketKind::Trade { px, qty, aggressor } => {
                     w.i64(px.to_scaled());
                     w.i64(qty.to_scaled());
@@ -260,7 +261,7 @@ fn write_payload(event: &Event, w: &mut Writer<'_>) {
 
 fn read_payload(kind: u8, flags: u8, r: &mut Reader<'_>) -> Result<Event, CodecError> {
     let event = match kind {
-        QUOTE | TRADE | BOOK_LEVEL | BOOK_APPLIED => {
+        QUOTE | TRADE | BOOK_LEVEL | BOOK_APPLIED | BOOK_RESET => {
             let instrument = InstrumentId::new(r.u32()?);
             let exchange_time = Timestamp::from_nanos(r.i64()?);
             let receive_time = Timestamp::from_nanos(r.i64()?);
@@ -281,6 +282,7 @@ fn read_payload(kind: u8, flags: u8, r: &mut Reader<'_>) -> Result<Event, CodecE
                     px: Px::from_scaled(r.i64()?),
                     qty: Qty::from_scaled(r.i64()?),
                 },
+                BOOK_RESET => MarketKind::BookReset,
                 _ => MarketKind::BookApplied,
             };
             Event::In(Inbound::Market(MarketEvent {

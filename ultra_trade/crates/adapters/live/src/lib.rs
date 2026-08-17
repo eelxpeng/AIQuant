@@ -277,10 +277,10 @@ pub fn parse_line(
     })?;
     // Checked before the symbol on purpose. A line that is not an event at all
     // should be diagnosed as that, not as an unknown symbol in field two.
-    if !matches!(kind, "Q" | "T" | "L" | "A") {
+    if !matches!(kind, "Q" | "T" | "L" | "A" | "R") {
         return Err(FeedError::Malformed {
             line: number,
-            reason: "first field must be Q, T, L or A",
+            reason: "first field must be Q, T, L, A or R",
         });
     }
 
@@ -365,6 +365,10 @@ pub fn parse_line(
             MarketKind::Level { side, px, qty }
         }
         "A" => MarketKind::BookApplied,
+        // The bridge caught our book disagreeing with the venue's checksum, or
+        // is opening a subscription. Either way what is held is discarded and a
+        // snapshot follows.
+        "R" => MarketKind::BookReset,
         // Unreachable: the kind was checked above, before the symbol.
         other => unreachable!("unchecked record kind {other:?}"),
     };

@@ -89,7 +89,7 @@ fn blank_lines_and_comments_are_skipped() {
 #[test]
 fn a_malformed_line_is_refused_with_its_line_number() {
     let cases: [(&str, &str); 6] = [
-        ("X BTCUSD 1 2 3 4 5", "first field must be Q, T, L or A"),
+        ("X BTCUSD 1 2 3 4 5", "first field must be Q, T, L, A or R"),
         ("Q BTCUSD", "no exchange timestamp"),
         (
             "Q BTCUSD notanumber 1 1 1 1",
