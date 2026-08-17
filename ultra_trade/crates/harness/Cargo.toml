@@ -16,3 +16,6 @@ config = { path = "../config" }
 historical = { path = "../adapters/historical" }
 sim_venue = { path = "../adapters/sim" }
 report = { path = "../report" }
+
+[dev-dependencies]
+risk = { path = "../risk" }

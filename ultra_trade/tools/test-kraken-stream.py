@@ -165,3 +165,43 @@ if failures:
         print(f"  - {failure}", file=sys.stderr)
     sys.exit(1)
 print("kraken-stream: all checks pass")
+
+# ---- levels that leave the top of the book -------------------------------
+#
+# The venue stops mentioning a level that falls out of its top N rather than
+# removing it. Anything downstream that is not told holds it for ever, and the
+# checksum keeps passing because it only covers the top N of *this* book. That
+# was a real bug, caught by a phantom level sitting at the touch of a
+# reconstructed ladder.
+
+book = {"bids": [], "asks": []}
+gone = ks.apply_levels(
+    book, "bids", [{"price": f"{100 + n}.0", "qty": "1"} for n in range(3)], depth=3
+)
+check("nothing leaves a book that is filling up", gone, [])
+
+# A better bid arrives, so the worst of the three is pushed out.
+gone = ks.apply_levels(book, "bids", [{"price": "110.0", "qty": "1"}], depth=3)
+check("the level pushed out is reported", gone, ["100.0"])
+check(
+    "and is really gone from the book",
+    [level["price"] for level in book["bids"]],
+    ["110.0", "102.0", "101.0"],
+)
+
+# An explicit removal is reported the same way, so a consumer sees one rule.
+gone = ks.apply_levels(book, "bids", [{"price": "102.0", "qty": "0"}], depth=3)
+check("an explicit removal is reported too", gone, ["102.0"])
+
+# Asks push out from the other end.
+book = {"bids": [], "asks": []}
+ks.apply_levels(book, "asks", [{"price": f"{100 + n}.0", "qty": "1"} for n in range(3)], depth=3)
+gone = ks.apply_levels(book, "asks", [{"price": "99.0", "qty": "1"}], depth=3)
+check("the worst ask is the one pushed out", gone, ["102.0"])
+
+if failures:
+    print(f"{len(failures)} failure(s):\n", file=sys.stderr)
+    for failure in failures:
+        print(f"  - {failure}", file=sys.stderr)
+    sys.exit(1)
+print("kraken-stream: level-eviction checks pass")

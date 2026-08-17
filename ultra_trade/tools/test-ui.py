@@ -107,6 +107,12 @@ try:
         failures.append("the read path must say how long it took (ADR D-7)")
     if not isinstance(body["totals"]["total"], str):
         failures.append("money must be a string, never a JSON number")
+    if "book" not in body:
+        failures.append("the read path must carry the book for the ladder")
+    else:
+        for side in ("bids", "asks", "working"):
+            if side not in body["book"][0]:
+                failures.append(f"the ladder needs {side}")
 
     # The whole reason the viewer is a separate program.
     status, body = post(base + "/api/command", {"command": "kill"})
@@ -153,6 +159,37 @@ try:
     check("a missing command is refused", status, 400)
 
     check("what reached the session", pipe.read_text(), "halt\nflatten\n")
+    server.shutdown()
+
+    # ---- the sweep, and where it is refused ------------------------------
+    #
+    # A sweep is N backtests and can saturate the machine. The console is
+    # attached to a live session by definition, so it says no unless told
+    # otherwise (ADR D-8).
+    base, server = serve(
+        console_mod.Console, tools=Tools(log), console=str(pipe), allow_sweep=False
+    )
+    status, body = post(base + "/api/sweep", {"config": "x.conf"})
+    check("the console refuses a sweep by default", status, 409)
+    if "--allow-sweep" not in body["error"]:
+        failures.append("and should say how to permit it")
+    server.shutdown()
+
+    base, server = serve(viewer_mod.Viewer, tools=Tools(log), console=None)
+    conf = work / "s.conf"
+    status, body = post(
+        base + "/api/sweep",
+        {"config": str(conf), "vary": ["UI.window=4,6"], "split": 0.7},
+    )
+    check("the viewer runs one", status, 200)
+    check("and returns a row per variant", len(body.get("runs", [])), 2)
+    if body["runs"] and body["runs"][0]["out_total"] is None:
+        failures.append("a split must produce an out-of-sample column")
+
+    status, body = post(base + "/api/sweep", {})
+    check("a sweep with no config is refused", status, 400)
+    status, body = post(base + "/api/sweep", {"config": str(conf), "vary": "nope"})
+    check("vary must be a list", status, 400)
     server.shutdown()
 
     # ---- a session that is not there -------------------------------------

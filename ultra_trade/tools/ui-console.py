@@ -46,6 +46,12 @@ class Console(Handler):
         return self._json(404, {"error": f"no route {self.path}"})
 
     def do_POST(self):
+        if self.path == "/api/sweep":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                return self._sweep(json.loads(self.rfile.read(length) or b"{}"))
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "body is not JSON"})
         if self.path != "/api/command":
             return self._json(404, {"error": f"no route {self.path}"})
         length = int(self.headers.get("Content-Length") or 0)
@@ -93,6 +99,12 @@ def main():
         help="the pipe the session was started with (paper --commands)",
     )
     parser.add_argument("--port", type=int, default=8081)
+    parser.add_argument(
+        "--allow-sweep",
+        action="store_true",
+        help="permit sweeps here; off because this console is attached to a "
+        "live session and a sweep can starve it",
+    )
     parser.add_argument("--binaries", default=None)
     args = parser.parse_args()
 
@@ -102,6 +114,7 @@ def main():
 
     Console.tools = Tools(args.recording, args.binaries)
     Console.console = args.commands
+    Console.allow_sweep = args.allow_sweep
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Console)
     print(f"console on http://127.0.0.1:{args.port}  (CAN SEND COMMANDS)")
     print(f"  reading  {args.recording}")
