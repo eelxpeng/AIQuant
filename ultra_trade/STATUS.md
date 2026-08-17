@@ -6,8 +6,8 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **27,400 lines, 490 tests, 15 crates, 5 binaries, zero third-party
-dependencies** in the trading path.
+Today: **27,700 lines, 490 tests, 15 crates, 5 binaries, zero third-party
+dependencies** in the trading path — and a UI that adds none.
 
 ---
 
@@ -31,16 +31,16 @@ ticks when it works end to end from a command line, not when its parts compile.
       ranked, measured out of sample.
 - [x] **8 · A real venue, read-only.** Streaming market data with depth and
       checksums, still trading against the simulator.
-- [ ] **9 · Believable fills.** ← **you are here.** The simulator's remaining
+- [ ] **9 · Believable fills.** The simulator's remaining
       optimism named and bounded, so a backtest result can be argued for rather
       than merely produced.
-- [ ] **10 · Somewhere to look.** A UI: watch a live session, read a recording,
-      compare a sweep, and press the buttons — without a terminal.
-- [ ] **11 · Sustained operation.** Rung 8 run for days rather than minutes,
+- [x] **10 · Somewhere to look.** A web viewer and a separate operator console:
+      watch a live session, read a recording, and press the four buttons.
+- [ ] **11 · Sustained operation.** ← **you are here.** Rung 8 run for days rather than minutes,
       with the failures that only appear at that timescale.
 - [ ] **12 · Live.** Real orders, real money.
 
-Rungs 1–8 took PRs #7 to #34. Rung 12 is deliberately far away and nothing
+Rungs 1–8 and 10 took PRs #7 to #35. Rung 12 is deliberately far away and nothing
 below should be read as saying otherwise.
 
 ---
@@ -85,35 +85,30 @@ the architecture doc was written.
       `adr/1-operator-ui-contract.md`). What the UI may read, what it may
       write, and what a disconnect means per command.
 
-**Two prerequisites the ADR turned up.** Neither is large; both block
-everything under them and should land separately, with their own tests:
-
-- [ ] **`journal --json` and `sweep --json`.** Every tool prints aligned text
-      for a human today, and a UI parsing that breaks the first time a column
-      moves. This is the seam the whole design rests on (ADR D-2).
-- [ ] **`paper --commands <path>`.** Commands are read from the terminal that
-      launched the process, so no other program can send one — the operator
-      console is impossible until this exists. A named pipe also removes the
-      current limitation that commands are disabled entirely when the market
-      source is stdin.
-- [ ] **A way to tell a live session from a finished one**, so the viewer knows
-      whether to keep polling.
-
-Then, in order:
-
-- [ ] **A read-only web view of a recording.** Equity curve, fills, refusals,
-      the book at a chosen moment, feed-lag distribution. `journal` already
-      derives all of it; this is presentation, and it is where a person would
-      actually notice a session doing something strange.
-- [ ] **A live session monitor.** Position, working orders, P&L, feed lag,
-      engine state, updating as the session runs. Reads the recording as it is
-      written — no new path into the engine.
-- [ ] **Sweep results as a sortable table**, in-sample and out-of-sample side by
-      side with the rank change highlighted. `sweep` prints this today; a table
-      you can sort is a different tool.
-- [ ] **The operator console** — halt, resume, kill, flatten — which *is* the
-      `client` process. The one part that **writes**, so the part to build last
-      and most carefully.
+- [x] **`journal --json` and `sweep --json`** (#35). Money is emitted as
+      strings, never JSON numbers — a fixed-point price through a double is
+      not the price any more.
+- [x] **`paper --commands <path>`** (#35). A named pipe, so a separate process
+      can steer a session; standard input belongs to whoever launched it. Also
+      removes the old limitation that commands were disabled entirely when the
+      market source was stdin.
+- [x] **`tools/ui-view.py`** (#35) — the read-only viewer. Totals marked to
+      market, equity curve, positions, refusals, feed lag, recent fills. It
+      polls, so it is always slightly behind, and it says how far.
+- [x] **`tools/ui-console.py`** (#35) — the same page plus the four buttons,
+      a separate program you start deliberately. A command reports `pending`
+      and is only done when it appears in the recording.
+- [x] **Live or finished** is derived rather than asserted: the recording
+      growing is the only evidence a session is running, and the page shows
+      "no new records for Ns" when it stops.
+- [ ] **Sweep results in the UI.** `sweep --json` exists and nothing renders it
+      yet — the in-sample and out-of-sample columns side by side, sortable,
+      with the rank change called out.
+- [ ] **The book, rendered.** Depth is in the recording and the page does not
+      show it. A ladder is the obvious thing a person wants when deciding
+      whether a quote is well placed.
+- [ ] **Authentication**, and therefore anything beyond one machine. Both
+      servers bind to loopback and neither asks who you are.
 
 **The rules, from the ADR.** The UI is not in the Rust workspace and never
 decodes the log itself — it calls `journal`, because a second decoder of a

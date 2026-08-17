@@ -66,6 +66,7 @@ struct Args {
     conf: String,
     axes: Vec<Axis>,
     split: Option<f64>,
+    json: bool,
 }
 
 fn usage() -> ! {
@@ -73,6 +74,7 @@ fn usage() -> ! {
     eprintln!();
     eprintln!("  --vary   a setting to try several values of; repeatable, and");
     eprintln!("           several flags multiply out into a grid");
+    eprintln!("  --json   the ranked grid as JSON, for a caller that sorts it itself");
     eprintln!("  --split  fraction of the recording to choose on, measuring the");
     eprintln!("           rest out of sample. 0.7 is a reasonable default.");
     eprintln!();
@@ -89,6 +91,7 @@ fn parse_args() -> Args {
     let mut positional: Vec<String> = Vec::new();
     let mut axes = Vec::new();
     let mut split = None;
+    let mut json = false;
 
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -111,6 +114,7 @@ fn parse_args() -> Args {
                     values,
                 });
             }
+            "--json" => json = true,
             "--split" => {
                 let raw = argv.next().unwrap_or_else(|| usage());
                 let value: f64 = raw
@@ -133,6 +137,7 @@ fn parse_args() -> Args {
         conf: positional[1].clone(),
         axes,
         split,
+        json,
     }
 }
 
@@ -267,6 +272,20 @@ fn print(
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
+    // Ranked by what the run was actually worth, not by realized profit: a
+    // variant that ends holding a large position has not finished yet.
+    rows.sort_by(|a, b| {
+        b.inside
+            .valuation
+            .total
+            .to_scaled()
+            .cmp(&a.inside.valuation.total.to_scaled())
+    });
+
+    if args.json {
+        return print_json(&mut out, args, rows).and_then(|()| out.flush());
+    }
+
     writeln!(out, "sweep over {}", args.path)?;
     writeln!(out, "  session id     {}", header.session_id)?;
     writeln!(out, "  records        {}", all.len())?;
@@ -281,16 +300,6 @@ fn print(
         None => writeln!(out, "  split          none — see the warning below")?,
     }
     writeln!(out)?;
-
-    // Ranked by what the run was actually worth, not by realized profit: a
-    // variant that ends holding a large position has not finished yet.
-    rows.sort_by(|a, b| {
-        b.inside
-            .valuation
-            .total
-            .to_scaled()
-            .cmp(&a.inside.valuation.total.to_scaled())
-    });
 
     let width = rows.iter().map(|r| r.label.len()).max().unwrap_or(4).max(4);
     if outside.is_some() {
@@ -359,6 +368,50 @@ fn print(
 /// Says whether the in-sample winner survived out of sample.
 ///
 /// The single most useful line in the output, and the reason `--split` exists.
+/// The ranked grid as JSON, for a caller that wants to sort it themselves.
+///
+/// Money is emitted as strings for the same reason `journal` does it: a JSON
+/// number is a double, and a fixed-point value that goes through one is not
+/// the value any more.
+fn print_json(out: &mut impl Write, args: &Args, rows: &[Row]) -> io::Result<()> {
+    writeln!(out, "{{")?;
+    writeln!(out, "  \"recording\": {:?},", args.path)?;
+    writeln!(
+        out,
+        "  \"split\": {},",
+        args.split
+            .map(|f| format!("{f}"))
+            .unwrap_or_else(|| "null".to_string())
+    )?;
+    writeln!(out, "  \"runs\": [")?;
+    for (n, row) in rows.iter().enumerate() {
+        let comma = if n + 1 == rows.len() { "" } else { "," };
+        let out_total = row
+            .outside
+            .as_ref()
+            .map(|o| format!("\"{}\"", o.valuation.total))
+            .unwrap_or_else(|| "null".to_string());
+        let out_dd = row
+            .outside
+            .as_ref()
+            .map(|o| format!("\"{}\"", o.max_drawdown))
+            .unwrap_or_else(|| "null".to_string());
+        writeln!(
+            out,
+            "    {{\"variant\": {:?}, \"in_total\": \"{}\", \"in_drawdown\": \"{}\",              \"fills\": {}, \"refused\": {}, \"out_total\": {out_total},              \"out_drawdown\": {out_dd}, \"complete\": {}}}{comma}",
+            row.label,
+            row.inside.valuation.total,
+            row.inside.max_drawdown,
+            row.inside.fills,
+            row.inside.intents_rejected,
+            row.inside.valuation.is_complete(),
+        )?;
+    }
+    writeln!(out, "  ]")?;
+    writeln!(out, "}}")?;
+    Ok(())
+}
+
 fn report_rank_change(out: &mut impl Write, rows: &[Row]) -> io::Result<()> {
     let Some(best_inside) = rows.first() else {
         return Ok(());

@@ -24,6 +24,13 @@ model that works in a notebook is a hypothesis, not a design.
 | `STATUS.md` | what is built, what is not, and where the work is up to |
 | `docs/SYSTEM-MAP.md` | how the pieces fit together, with diagrams |
 
+Watch a session in a browser:
+
+```bash
+cargo run -p paper -- examples/kraken.conf /tmp/md session.log &
+python3 tools/ui-view.py session.log        # http://127.0.0.1:8080, read-only
+```
+
 `STATUS.md` tracks what is built and what is next. Priority and scope splits
 live in GitHub issues — roadmap #1 and its phase hubs.
 

@@ -1,0 +1,332 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ultra_trade</title>
+<!--
+  One page, no dependencies. Nothing is loaded from a CDN: a UI that fetches a
+  charting library from the internet is a UI that stops working when the
+  internet does, and this one is meant to be looked at while a session is
+  running (ADR, operator UI contract).
+
+  It renders the SVG itself, which is a few lines, rather than pulling in a
+  library to do it.
+-->
+<style>
+  :root {
+    --bg: #12141a; --panel: #1a1d26; --line: #2a2e3a;
+    --ink: #e6e8ee; --dim: #8b93a7; --good: #4ec9a0; --bad: #f2777a;
+    --warn: #e8c07d; --accent: #7aa2f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 2;
+  }
+  h1 { font-size: 14px; margin: 0; letter-spacing: .04em; }
+  .stale { color: var(--dim); margin-left: auto; }
+  .live { color: var(--good); }
+  .idle { color: var(--warn); }
+  main { padding: 18px; display: grid; gap: 18px; max-width: 1200px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  section > h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--dim); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line);
+  }
+  .body { padding: 14px; overflow-x: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .v { font-size: 17px; margin-top: 2px; }
+  .v.big { font-size: 22px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: right; padding: 4px 10px; white-space: nowrap; }
+  th { color: var(--dim); font-weight: normal; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  tbody tr:hover { background: #20242f; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  .banner { padding: 9px 14px; border-radius: 4px; margin-bottom: 12px; }
+  .banner.warn { background: #3a2f1c; color: var(--warn); }
+  .banner.err { background: #3a2226; color: var(--bad); }
+  button {
+    font: inherit; padding: 8px 16px; margin-right: 8px; cursor: pointer;
+    background: #232733; color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.danger { border-color: #5a2a2e; }
+  button.danger:hover:not(:disabled) { border-color: var(--bad); }
+  #log { color: var(--dim); font-size: 12px; margin-top: 10px; white-space: pre-wrap; }
+  svg { display: block; width: 100%; height: 180px; }
+</style>
+
+<header>
+  <h1>ultra_trade</h1>
+  <span id="where" class="stale"></span>
+  <span id="freshness" class="stale"></span>
+</header>
+
+<main>
+  <div id="alerts"></div>
+
+  <section>
+    <h2>this session</h2>
+    <div class="body"><div class="grid" id="totals"></div></div>
+  </section>
+
+  <section id="controls" hidden>
+    <h2>operator</h2>
+    <div class="body">
+      <button data-cmd="halt">halt</button>
+      <button data-cmd="resume">resume</button>
+      <button data-cmd="flatten" class="danger">flatten</button>
+      <button data-cmd="kill" class="danger">kill</button>
+      <div id="log"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>equity, marked to market</h2>
+    <div class="body"><svg id="curve" viewBox="0 0 1000 180" preserveAspectRatio="none"></svg></div>
+  </section>
+
+  <section>
+    <h2>positions</h2>
+    <div class="body"><table id="positions"></table></div>
+  </section>
+
+  <section>
+    <h2>feed</h2>
+    <div class="body"><div class="grid" id="feed"></div></div>
+  </section>
+
+  <section>
+    <h2>refusals</h2>
+    <div class="body"><table id="refusals"></table></div>
+  </section>
+
+  <section>
+    <h2>fills</h2>
+    <div class="body"><table id="fills"></table></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// Money arrives as strings, deliberately: a JSON number is a double and a
+// fixed-point price through one is not the price any more. Parsing is only
+// ever for pixels and colour, never for anything displayed.
+const px = (s) => (s === null || s === undefined ? NaN : parseFloat(s));
+const el = (id) => document.getElementById(id);
+const sign = (s) => (px(s) > 0 ? "pos" : px(s) < 0 ? "neg" : "");
+const ms = (nanos) => (nanos / 1e6).toFixed(1) + "ms";
+
+let lastRecords = -1;
+let lastGrowth = Date.now();
+let pending = null;
+let pendingCommands = -1;
+
+function tile(k, v, cls, big) {
+  return `<div><div class="k">${k}</div>
+          <div class="v ${big ? "big" : ""} ${cls || ""}">${v}</div></div>`;
+}
+
+function rows(head, body) {
+  return `<thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+          <tbody>${body}</tbody>`;
+}
+
+function curve(fills) {
+  const svg = el("curve");
+  if (!fills || fills.length < 2) {
+    svg.innerHTML = `<text x="12" y="24" fill="#8b93a7" font-size="12">
+      not enough fills to draw a curve</text>`;
+    return;
+  }
+  const ys = fills.map((f) => px(f.total_realized));
+  const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
+  const span = hi - lo || 1;
+  const at = (i, y) => [
+    (i / (fills.length - 1)) * 1000,
+    170 - ((y - lo) / span) * 160,
+  ];
+  const path = ys.map((y, i) => `${i ? "L" : "M"}${at(i, y).join(",")}`).join("");
+  const zero = at(0, 0)[1];
+  svg.innerHTML = `
+    <line x1="0" y1="${zero}" x2="1000" y2="${zero}" stroke="#2a2e3a"/>
+    <path d="${path}" fill="none" stroke="${ys[ys.length - 1] >= 0 ? "#4ec9a0" : "#f2777a"}"
+          stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    <text x="6" y="14" fill="#8b93a7" font-size="11">${hi.toFixed(2)}</text>
+    <text x="6" y="176" fill="#8b93a7" font-size="11">${lo.toFixed(2)}</text>`;
+}
+
+function alerts(d) {
+  const out = [];
+  if (!d.session.intact) {
+    out.push(`<div class="banner warn">This recording lost
+      ${d.session.discarded_bytes} bytes to a crash. Everything below is
+      derived from what survived.</div>`);
+  }
+  if (d.session.segments > 1) {
+    out.push(`<div class="banner warn">${d.session.segments} segments — this
+      session was continued after a crash.</div>`);
+  }
+  if (!d.totals.complete) {
+    out.push(`<div class="banner warn">A position could not be marked, so the
+      total below excludes it.</div>`);
+  }
+  if (d.book.resyncs > 0) {
+    out.push(`<div class="banner warn">${d.book.resyncs} book resync(s) — the
+      venue caught our book being wrong. Decisions before each were made
+      against it.</div>`);
+  }
+  if (d.feed_lag_nanos && d.feed_lag_nanos.min < 0) {
+    out.push(`<div class="banner warn">Clock skew: an event arrived before the
+      venue stamped it. Every lag figure here is suspect.</div>`);
+  }
+  el("alerts").innerHTML = out.join("");
+}
+
+function render(d) {
+  el("where").textContent = `session ${d.session.id} · format ${d.session.format}`;
+
+  // Liveness is derived rather than asserted: the recording growing is the
+  // only evidence a session is still running.
+  if (d.session.records !== lastRecords) {
+    lastRecords = d.session.records;
+    lastGrowth = Date.now();
+  }
+  const quiet = Math.round((Date.now() - lastGrowth) / 1000);
+  const f = el("freshness");
+  f.className = quiet < 5 ? "live" : "idle";
+  f.textContent =
+    (quiet < 5 ? "● live" : `○ no new records for ${quiet}s`) +
+    ` · ${d.session.records} records · read in ${d.read_took_ms}ms`;
+
+  alerts(d);
+
+  const t = d.totals;
+  el("totals").innerHTML =
+    tile("total", t.total, sign(t.total), true) +
+    tile("realized", t.realized, sign(t.realized)) +
+    tile("unrealized", t.unrealized, sign(t.unrealized)) +
+    tile("fees", t.fees) +
+    tile("max drawdown", t.max_drawdown) +
+    tile("orders", t.orders) +
+    tile("fills", t.fills) +
+    tile("refused", t.refused) +
+    tile("state", t.state, t.state === "Running" ? "pos" : "neg") +
+    tile("marked at", t.mark_rule);
+
+  el("positions").innerHTML = rows(
+    ["instrument", "position", "realized", "unrealized", "mark", "total"],
+    d.positions
+      .map((p) => {
+        const total =
+          p.unrealized === null ? "—" : (px(p.realized) + px(p.unrealized)).toFixed(9);
+        return `<tr><td>${p.symbol}</td>
+          <td class="${sign(p.position)}">${p.position}</td>
+          <td class="${sign(p.realized)}">${p.realized}</td>
+          <td class="${sign(p.unrealized)}">${p.unrealized ?? "no mark"}</td>
+          <td>${p.mark ?? "—"}</td>
+          <td class="${sign(total)}">${total}</td></tr>`;
+      })
+      .join("")
+  );
+
+  const lag = d.feed_lag_nanos;
+  el("feed").innerHTML = lag
+    ? tile("lag p50", ms(lag.p50)) +
+      tile("p90", ms(lag.p90)) +
+      tile("p99", ms(lag.p99)) +
+      tile("worst", ms(lag.max)) +
+      tile("events", lag.events) +
+      tile("book resets", d.book.resets)
+    : tile("lag", "no market events");
+
+  el("refusals").innerHTML = d.refusals.length
+    ? rows(
+        ["reason", "count"],
+        d.refusals.map((r) => `<tr><td>${r.reason}</td><td>${r.count}</td></tr>`).join("")
+      )
+    : `<tbody><tr><td style="color:#8b93a7">nothing was refused</td></tr></tbody>`;
+
+  if (d.fills) {
+    curve(d.fills);
+    const recent = d.fills.slice(-40).reverse();
+    el("fills").innerHTML = rows(
+      ["seq", "instrument", "side", "qty", "price", "fee", "position", "realized"],
+      recent
+        .map(
+          (x) => `<tr><td>#${x.seq}</td><td>${x.symbol}</td><td>${x.side}</td>
+            <td>${x.qty}</td><td>${x.px}</td><td>${x.fee}</td>
+            <td class="${sign(x.position)}">${x.position}</td>
+            <td class="${sign(x.realized)}">${x.realized}</td></tr>`
+        )
+        .join("")
+    );
+  }
+
+  // A command is done when the engine's own record of it shows up, never when
+  // the POST returned (ADR D-4).
+  if (pending && d.totals.orders >= 0) {
+    if (pendingCommands < 0) pendingCommands = d.session.records;
+    else if (d.session.records > pendingCommands) {
+      note(`${pending} is in the recording — the engine acted on it.`);
+      pending = null;
+      pendingCommands = -1;
+    }
+  }
+
+  el("controls").hidden = !d.can_control;
+}
+
+function note(text) {
+  const log = el("log");
+  log.textContent = `${new Date().toLocaleTimeString()}  ${text}\n` + log.textContent;
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/session?fills=1");
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    render(d);
+  } catch (e) {
+    el("alerts").innerHTML =
+      `<div class="banner err">Cannot read the session: ${e.message}</div>`;
+  }
+}
+
+document.querySelectorAll("#controls button").forEach((b) =>
+  b.addEventListener("click", async () => {
+    const cmd = b.dataset.cmd;
+    if (cmd === "flatten" || cmd === "kill") {
+      if (!confirm(`Send ${cmd} to this session?`)) return;
+    }
+    b.disabled = true;
+    try {
+      const r = await fetch("/api/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      pending = cmd;
+      pendingCommands = -1;
+      note(`${cmd}: ${d.status} — ${d.note}`);
+    } catch (e) {
+      note(`${cmd} could not be sent: ${e.message}`);
+    } finally {
+      setTimeout(() => (b.disabled = false), 600);
+    }
+  })
+);
+
+poll();
+setInterval(poll, 1000);
+</script>

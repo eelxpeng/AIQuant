@@ -37,12 +37,26 @@ use event::{BackgroundLog, EngineState, Segments};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
 use recovery::recover;
 use sim_venue::{Fees, FillModel, Queue, SimVenue};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::time::{Duration, Instant};
 use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
 
 /// How often the session says what it is doing.
 const STATUS_EVERY: Duration = Duration::from_secs(5);
+
+/// Prints a line, and does not die if nobody is listening.
+///
+/// `println!` panics when stdout is closed, which for a long-running session
+/// means `paper | head` kills a live trade. A reader going away is not a
+/// trading problem: the recording is the record, and the console is a
+/// convenience. So the line is dropped and the session carries on.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, $($arg)*);
+    }};
+}
 
 fn usage() -> ! {
     eprintln!("usage: paper <session.conf> <market-source> <output.log>");
@@ -52,6 +66,9 @@ fn usage() -> ! {
     eprintln!("  output.log      where to record the session; must not exist");
     eprintln!();
     eprintln!("operator commands are read from stdin: halt, resume, kill, flatten");
+    eprintln!();
+    eprintln!("  --commands <path>  read them from a named pipe instead, so a separate");
+    eprintln!("                     process can send them (see tools/ui-console.py)");
     eprintln!();
     eprintln!("feed protocol, one event per line:");
     eprintln!("  Q <symbol> <exchange_nanos> <bid_px> <bid_qty> <ask_px> <ask_qty>");
@@ -65,7 +82,17 @@ fn fail(context: &str, e: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--commands <path>` before the positionals are counted, so the three
+    // required arguments stay three.
+    let mut command_path: Option<String> = None;
+    if let Some(at) = args.iter().position(|a| a == "--commands") {
+        if at + 1 >= args.len() {
+            usage();
+        }
+        command_path = Some(args.remove(at + 1));
+        args.remove(at);
+    }
     if args.len() != 3 {
         usage();
     }
@@ -118,15 +145,39 @@ fn main() {
         symbols.add(instrument.symbol.clone(), instrument.id);
     }
 
-    // Standard input is either the market data or the operator's console. It
-    // cannot be both, and pretending otherwise would silently eat commands.
-    let (source, commands): (Box<dyn std::io::Read + Send>, _) = if source_path == "-" {
-        (Box::new(std::io::stdin()), None)
-    } else {
-        let file = File::open(source_path)
-            .unwrap_or_else(|e| fail(&format!("cannot open {source_path}"), e));
-        (Box::new(file), Some(commands_from(std::io::stdin())))
+    // Where the operator's commands come from. A path — in practice a named
+    // pipe — lets a separate process send them, which is what the console
+    // needs: standard input belongs to whoever launched this process, so
+    // nothing else can reach it (ADR, operator UI contract).
+    let control: Option<Box<dyn std::io::Read + Send>> = match &command_path {
+        Some(path) => {
+            // Opened read *and* write on purpose. A pipe opened read-only
+            // blocks until a writer appears, and then reports end-of-file the
+            // moment the last one leaves — so a console that reconnects would
+            // find the session had stopped listening. Holding a writer end
+            // ourselves means neither happens.
+            let pipe = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .unwrap_or_else(|e| fail(&format!("cannot open {path}"), e));
+            Some(Box::new(pipe))
+        }
+        // Standard input is either the market data or the operator's console.
+        // It cannot be both, and pretending otherwise would silently eat
+        // commands.
+        None if source_path != "-" => Some(Box::new(std::io::stdin())),
+        None => None,
     };
+    let source: Box<dyn std::io::Read + Send> = if source_path == "-" {
+        Box::new(std::io::stdin())
+    } else {
+        Box::new(
+            File::open(source_path)
+                .unwrap_or_else(|e| fail(&format!("cannot open {source_path}"), e)),
+        )
+    };
+    let commands = control.map(commands_from);
 
     let mut feed = LiveFeed::spawn(source, symbols, clock.clone(), commands);
 
@@ -173,11 +224,11 @@ fn main() {
         None
     };
 
-    println!("paper session from {config_path}");
-    println!("  market source  {source_path}");
-    println!("  recording to   {log_path}");
+    say!("paper session from {config_path}");
+    say!("  market source  {source_path}");
+    say!("  recording to   {log_path}");
     for i in &session.instruments {
-        println!(
+        say!(
             "  instrument     {} (id {})  tick {}  lot {}",
             i.symbol,
             i.id.raw(),
@@ -185,35 +236,35 @@ fn main() {
             i.instrument.lot()
         );
     }
-    println!("  strategies     {}", session.strategies.len());
+    say!("  strategies     {}", session.strategies.len());
     if let Some(recovered) = &recovered {
-        println!(
+        say!(
             "  RESUMED        after a crash, from {} records",
             recovered.records
         );
         if !recovered.recovery.is_clean() {
-            println!(
+            say!(
                 "                 {} — the tail was lost",
                 recovered.recovery
             );
         }
         for position in recovered.from_log.iter() {
             if !position.is_flat() {
-                println!(
+                say!(
                     "                 holding {} of instrument {}",
                     position.qty(),
                     position.instrument().raw()
                 );
             }
         }
-        println!("  state          HALTED — type `resume` to trade again");
+        say!("  state          HALTED — type `resume` to trade again");
     }
-    if source_path == "-" {
-        println!("  commands       disabled (stdin is the market source)");
-    } else {
-        println!("  commands       halt | resume | kill | flatten");
+    match (&command_path, source_path.as_str()) {
+        (Some(path), _) => say!("  commands       {path} — halt | resume | kill | flatten"),
+        (None, "-") => say!("  commands       disabled (stdin is the market source)"),
+        (None, _) => say!("  commands       stdin — halt | resume | kill | flatten"),
     }
-    println!();
+    say!();
 
     // The pump, written here rather than using `engine::run`, so the session
     // can say what it is doing while it runs. It is the same three steps.
@@ -237,7 +288,7 @@ fn main() {
         // Anything new is worth seeing as it happens.
         while reported_orders < engine.orders().len() {
             if let Some(order) = engine.orders().iter().nth(reported_orders) {
-                println!(
+                say!(
                     "  order {} {:?} {} @ {:?}",
                     order.id(),
                     order.side(),
@@ -258,7 +309,7 @@ fn main() {
                     format!("{} {}", i.symbol, p.qty())
                 })
                 .collect();
-            println!(
+            say!(
                 "  [{:?}] {} events, {} orders, {}",
                 engine.state(),
                 feed.market_events(),
@@ -268,7 +319,7 @@ fn main() {
         }
 
         if engine.state() == EngineState::Killed {
-            println!("  killed; stopping");
+            say!("  killed; stopping");
             break;
         }
     }
@@ -282,30 +333,31 @@ fn main() {
     let commands_seen = feed.commands_seen();
     let orders = engine.orders().len();
 
-    println!();
-    println!("session over");
-    println!("  market events   {market_events}");
-    println!("  commands        {commands_seen}");
-    println!("  orders          {orders}");
+    say!();
+    say!("session over");
+    say!("  market events   {market_events}");
+    say!("  commands        {commands_seen}");
+    say!("  orders          {orders}");
     for i in &session.instruments {
         let p = engine.positions().get(i.id).expect("configured");
-        println!(
+        say!(
             "  {:<14}  realized {}  position {}",
             i.symbol,
             p.realized(),
             p.qty()
         );
     }
-    println!("  final state     {state:?}");
+    say!("  final state     {state:?}");
 
     // Persist and say whether it worked, rather than dropping the answer.
     match engine.into_log().shutdown() {
         Ok(report) => {
-            println!("  recorded        {} records to {log_path}", report.written);
+            say!("  recorded        {} records to {log_path}", report.written);
             if report.high_water * 2 > report.capacity {
-                println!(
+                say!(
                     "  WARNING         the log ring reached {} of {} — a slower disk would have halted the session",
-                    report.high_water, report.capacity
+                    report.high_water,
+                    report.capacity
                 );
             }
         }
