@@ -297,6 +297,19 @@ fn run() -> Result<(), Fault> {
         )?;
     }
     writeln!(out, "  max drawdown       {}", summary.max_drawdown)?;
+    if summary.book_resets > 0 {
+        writeln!(out, "  book resets        {}", summary.book_resets)?;
+    }
+    if summary.book_resyncs > 0 {
+        // A reset after data has already flowed is a checksum catching our
+        // book disagreeing with the venue's. Every decision before it was made
+        // against a book that was wrong, which is worth saying loudly.
+        writeln!(
+            out,
+            "  !! BOOK RESYNCS    {} — the venue caught a wrong book that many times",
+            summary.book_resyncs
+        )?;
+    }
     match summary.feed_lag {
         Some(lag) => {
             // How stale the market data was when it arrived. A property of the
@@ -540,6 +553,7 @@ fn describe(
                 }
                 MarketKind::Level { side, px, qty } => format!("level {side:?} {px} x {qty}"),
                 MarketKind::BookApplied => "book update applied".to_string(),
+                MarketKind::BookReset => "book reset, a snapshot follows".to_string(),
             };
             (
                 "market",

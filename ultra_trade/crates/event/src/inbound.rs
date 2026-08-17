@@ -107,6 +107,18 @@ pub enum MarketKind {
         /// how the venue says it too.
         qty: Qty,
     },
+    /// Forget this instrument's book; a fresh snapshot follows.
+    ///
+    /// A depth feed is a stream of deltas, so a single dropped or misapplied
+    /// update leaves a book that is **quietly wrong** rather than obviously
+    /// broken — the prices still look plausible and a fill model still walks
+    /// them. Venues publish a checksum so that can be caught; when it fails,
+    /// the only safe move is to throw the book away and start again.
+    ///
+    /// Emitted before the levels of any snapshot, so a resynchronisation and a
+    /// first subscription are the same thing and neither leaves a stale level
+    /// behind.
+    BookReset,
     /// Every level of the update just before this one is now in force.
     ///
     /// The marker that makes a run of levels atomic. Without it a strategy

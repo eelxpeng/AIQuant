@@ -63,6 +63,18 @@ pub struct SessionReport {
     pub positions: Positions,
     /// What the open positions are worth.
     pub valuation: Valuation,
+    /// Times the order book was discarded and rebuilt.
+    pub book_resets: u64,
+    /// Resets that were **not** the feed opening.
+    ///
+    /// A subscription starts with a reset, which is ordinary. One that arrives
+    /// after market data has already flowed is a venue checksum catching our
+    /// book disagreeing with the venue's — and the decisions taken before it
+    /// were made against a book that was wrong. Counted apart from
+    /// [`book_resets`] because only this number is alarming.
+    ///
+    /// [`book_resets`]: SessionReport::book_resets
+    pub book_resyncs: u64,
     /// How stale this recording's market data was when it arrived.
     ///
     /// `None` when the recording holds no market events, which is a different
@@ -199,6 +211,8 @@ pub fn summarize(
         rejections: Vec::new(),
         positions: Positions::with_instruments(instrument_count, 64),
         feed_lag: None,
+        book_resets: 0,
+        book_resyncs: 0,
         valuation: Valuation {
             rule,
             marks: vec![None; instrument_count],
@@ -212,6 +226,7 @@ pub fn summarize(
     // Kept unsorted while walking and sorted once at the end: a percentile
     // needs the whole set, and this is a report rather than a hot path.
     let mut lags: Vec<i64> = Vec::new();
+    let mut seen_market = false;
 
     // The book is rebuilt rather than tracked by hand, so "what is the mark"
     // has one definition and the report cannot disagree with the session about
@@ -257,6 +272,13 @@ pub fn summarize(
             Event::In(inbound) => {
                 report.inputs += 1;
                 if let Inbound::Market(market) = inbound {
+                    // A reset after market data has already flowed is a resync,
+                    // not a subscription opening. Only the position in the
+                    // stream tells them apart.
+                    if matches!(market.kind, event::MarketKind::BookReset) && seen_market {
+                        report.book_resyncs += 1;
+                    }
+                    seen_market = true;
                     lags.push(feed_lag_nanos(market.exchange_time, market.receive_time));
                     // The result is deliberately ignored: a refusal here is
                     // the same refusal the session made, and `Books` counts it.
@@ -343,6 +365,7 @@ pub fn summarize(
     }
     report.valuation.total = report.realized + report.valuation.unrealized;
     report.feed_lag = summarize_lag(&mut lags);
+    report.book_resets = books.book_resets();
     Ok(report)
 }
 

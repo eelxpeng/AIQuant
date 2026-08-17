@@ -39,6 +39,8 @@ pub(super) const COMMAND: u8 = 11;
 pub(super) const BOOK_LEVEL: u8 = 12;
 /// The end of a book update (format 2).
 pub(super) const BOOK_APPLIED: u8 = 13;
+/// Discard the book; a snapshot follows (format 3).
+pub(super) const BOOK_RESET: u8 = 14;
 
 pub(super) const ORDER_SUBMITTED: u8 = 64;
 pub(super) const CANCEL_SUBMITTED: u8 = 65;

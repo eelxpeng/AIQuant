@@ -291,3 +291,114 @@ fn a_level_carries_both_clocks_like_every_other_input() {
         42
     );
 }
+
+// ---- throwing a wrong book away ------------------------------------------
+
+fn reset(at: i64) -> MarketEvent {
+    MarketEvent {
+        instrument: I,
+        exchange_time: Timestamp::from_nanos(at),
+        receive_time: Timestamp::from_nanos(at),
+        kind: MarketKind::BookReset,
+    }
+}
+
+#[test]
+fn a_reset_leaves_no_level_behind() {
+    // The point of it. A depth feed is deltas, so a book that is wrong stays
+    // wrong for ever unless something throws it away — and a level that
+    // survives the reset is exactly the one that will still be wrong after.
+    let mut books = Books::with_instruments(1);
+    update(
+        &mut books,
+        10,
+        &[
+            level(10, Side::Buy, 100, 1),
+            level(10, Side::Buy, 99, 1),
+            level(10, Side::Sell, 101, 1),
+        ],
+    );
+    assert_eq!(books.apply(&reset(20)), Applied::Accepted);
+
+    assert!(books.depth(I, Side::Buy).expect("bids").is_empty());
+    assert!(books.depth(I, Side::Sell).expect("asks").is_empty());
+    assert!(books.top(I).is_none(), "and no stale top of book either");
+    assert_eq!(books.book_resets(), 1);
+}
+
+#[test]
+fn a_reset_discards_a_half_built_update_too() {
+    // Those levels belong to the book being thrown away. Keeping them would
+    // apply part of a bad update on top of the fresh snapshot.
+    let mut books = Books::with_instruments(1);
+    update(
+        &mut books,
+        10,
+        &[level(10, Side::Buy, 100, 1), level(10, Side::Sell, 101, 1)],
+    );
+    assert_eq!(
+        books.apply(&level(20, Side::Buy, 105, 7)),
+        Applied::Accepted
+    );
+    assert_eq!(books.apply(&reset(20)), Applied::Accepted);
+
+    update(
+        &mut books,
+        30,
+        &[level(30, Side::Buy, 50, 1), level(30, Side::Sell, 51, 1)],
+    );
+    assert_eq!(
+        prices(&books, Side::Buy),
+        vec![50],
+        "the abandoned level must not reappear"
+    );
+}
+
+#[test]
+fn a_snapshot_after_a_reset_rebuilds_the_book() {
+    let mut books = Books::with_instruments(1);
+    update(
+        &mut books,
+        10,
+        &[level(10, Side::Buy, 100, 1), level(10, Side::Sell, 101, 1)],
+    );
+    assert_eq!(books.apply(&reset(20)), Applied::Accepted);
+    update(
+        &mut books,
+        20,
+        &[level(20, Side::Buy, 200, 2), level(20, Side::Sell, 201, 3)],
+    );
+    let top = books.top(I).expect("rebuilt");
+    assert_eq!(top.bid_px, px(200));
+    assert_eq!(top.ask_px, px(201));
+}
+
+#[test]
+fn a_reset_is_not_refused_for_arriving_out_of_order() {
+    // The book being discarded is the one whose timestamps are not evidence of
+    // anything. Refusing the reset would leave the wrong book in place, which
+    // is the one outcome that must not happen.
+    let mut books = Books::with_instruments(1);
+    update(
+        &mut books,
+        100,
+        &[
+            level(100, Side::Buy, 100, 1),
+            level(100, Side::Sell, 101, 1),
+        ],
+    );
+    assert_eq!(books.apply(&reset(1)), Applied::Accepted);
+    assert!(books.depth(I, Side::Buy).expect("bids").is_empty());
+}
+
+#[test]
+fn resets_are_counted_so_a_session_can_say_it_happened() {
+    // Zero is the number to expect. Anything else means some earlier decisions
+    // were made against a book that did not match the venue's.
+    let mut books = Books::with_instruments(1);
+    assert_eq!(books.book_resets(), 0);
+    for at in [10, 20, 30] {
+        assert_eq!(books.apply(&reset(at)), Applied::Accepted);
+    }
+    assert_eq!(books.book_resets(), 3);
+}
