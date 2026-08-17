@@ -297,6 +297,51 @@ fn run() -> Result<(), Fault> {
         )?;
     }
     writeln!(out, "  max drawdown       {}", summary.max_drawdown)?;
+    match summary.feed_lag {
+        Some(lag) => {
+            // How stale the market data was when it arrived. A property of the
+            // feed that produced this recording, not of the run.
+            writeln!(
+                out,
+                "  feed lag           p50 {}  p90 {}  p99 {}  max {}  over {} events",
+                millis(lag.p50),
+                millis(lag.p90),
+                millis(lag.p99),
+                millis(lag.max),
+                lag.events
+            )?;
+            // An hour is far beyond any feed problem. It means the exchange
+            // timestamps did not come from the session that recorded them —
+            // synthetic data, or a file replayed long after it was captured —
+            // and the figures above are the gap between two unrelated days
+            // rather than a measurement of a feed.
+            const AN_HOUR: i64 = 3_600 * 1_000_000_000;
+            if lag.p50 > AN_HOUR {
+                writeln!(
+                    out,
+                    "  !! NOT A LIVE FEED these stamps are {} days apart, so this",
+                    lag.p50 / (86_400 * 1_000_000_000)
+                )?;
+                writeln!(
+                    out,
+                    "                     recording's market data was synthetic or replayed"
+                )?;
+                writeln!(
+                    out,
+                    "                     and the lag above measures nothing about a feed"
+                )?;
+            }
+            if lag.min < 0 {
+                // The one condition that makes every other figure here a lie.
+                writeln!(
+                    out,
+                    "  !! CLOCK SKEW      an event arrived {} before the venue stamped it",
+                    millis(-lag.min)
+                )?;
+            }
+        }
+        None => writeln!(out, "  feed lag           no market events to measure")?,
+    }
     writeln!(out, "  final state        {:?}", summary.final_state)?;
     for position in summary.positions.iter() {
         if position.is_flat() && position.realized() == Notional::ZERO {
@@ -323,6 +368,16 @@ fn run() -> Result<(), Fault> {
         }
     }
     Ok(out.flush()?)
+}
+
+/// Nanoseconds as milliseconds, which is the scale a feed lag lives at.
+///
+/// Three decimal places kept: a streaming feed's lag is single-digit
+/// milliseconds and rounding to whole ones would print most of it as zero.
+fn millis(nanos: i64) -> String {
+    let sign = if nanos < 0 { "-" } else { "" };
+    let n = nanos.unsigned_abs();
+    format!("{sign}{}.{:03}ms", n / 1_000_000, (n % 1_000_000) / 1_000)
 }
 
 fn symbol_of(symbols: &[String], instrument: InstrumentId) -> &str {

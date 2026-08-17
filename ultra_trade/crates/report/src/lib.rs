@@ -14,7 +14,7 @@
 use event::{EngineState, Event, Inbound, Outbound, Record, RiskReason, VenueKind};
 use marketdata::{Books, MarkRule};
 use oms::{PositionError, Positions};
-use types::{ExchangeTime, InstrumentId, Notional, OrderId, Px, Qty, Side};
+use types::{ExchangeTime, InstrumentId, Notional, OrderId, Px, Qty, Side, feed_lag_nanos};
 
 /// What a finished session did.
 #[derive(Debug, Clone)]
@@ -63,6 +63,11 @@ pub struct SessionReport {
     pub positions: Positions,
     /// What the open positions are worth.
     pub valuation: Valuation,
+    /// How stale this recording's market data was when it arrived.
+    ///
+    /// `None` when the recording holds no market events, which is a different
+    /// condition from "the feed was instant" and must not read as it.
+    pub feed_lag: Option<FeedLag>,
 }
 
 /// A valuation price, and the moment it was observed.
@@ -125,6 +130,32 @@ impl Valuation {
     }
 }
 
+/// How far behind the venue this recording's market data arrived.
+///
+/// A property of the **feed that produced the recording**, not of the session
+/// that traded on it — a backtest over the same file reports the same numbers,
+/// because it replays the same receive times.
+///
+/// Every event has carried both clocks since the first release and nothing
+/// ever compared them, so this is the first time the question "how stale is
+/// our view of the market" has an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedLag {
+    /// Market events measured.
+    pub events: usize,
+    /// The smallest lag seen, in nanoseconds. Negative means clock skew.
+    pub min: i64,
+    /// Median.
+    pub p50: i64,
+    /// Ninth decile.
+    pub p90: i64,
+    /// Ninety-ninth percentile — the tail that a latency budget lives or dies
+    /// on, and the one an average hides.
+    pub p99: i64,
+    /// The worst single event.
+    pub max: i64,
+}
+
 /// Why a log could not be summarized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReportError {
@@ -167,6 +198,7 @@ pub fn summarize(
         final_state: EngineState::Running,
         rejections: Vec::new(),
         positions: Positions::with_instruments(instrument_count, 64),
+        feed_lag: None,
         valuation: Valuation {
             rule,
             marks: vec![None; instrument_count],
@@ -176,6 +208,10 @@ pub fn summarize(
             unmarked: Vec::new(),
         },
     };
+
+    // Kept unsorted while walking and sorted once at the end: a percentile
+    // needs the whole set, and this is a report rather than a hot path.
+    let mut lags: Vec<i64> = Vec::new();
 
     // The book is rebuilt rather than tracked by hand, so "what is the mark"
     // has one definition and the report cannot disagree with the session about
@@ -221,6 +257,7 @@ pub fn summarize(
             Event::In(inbound) => {
                 report.inputs += 1;
                 if let Inbound::Market(market) = inbound {
+                    lags.push(feed_lag_nanos(market.exchange_time, market.receive_time));
                     // The result is deliberately ignored: a refusal here is
                     // the same refusal the session made, and `Books` counts it.
                     let _ = books.apply(market);
@@ -305,7 +342,32 @@ pub fn summarize(
         }
     }
     report.valuation.total = report.realized + report.valuation.unrealized;
+    report.feed_lag = summarize_lag(&mut lags);
     Ok(report)
+}
+
+/// Percentiles of the feed lag, or `None` if nothing was measured.
+///
+/// Nearest-rank, on the sorted set: with a handful of events an interpolated
+/// percentile invents a number between two real ones, and every figure here
+/// should be a lag some event actually had.
+fn summarize_lag(lags: &mut [i64]) -> Option<FeedLag> {
+    if lags.is_empty() {
+        return None;
+    }
+    lags.sort_unstable();
+    let at = |q: f64| -> i64 {
+        let rank = ((lags.len() as f64) * q).ceil() as usize;
+        lags[rank.clamp(1, lags.len()) - 1]
+    };
+    Some(FeedLag {
+        events: lags.len(),
+        min: lags[0],
+        p50: at(0.50),
+        p90: at(0.90),
+        p99: at(0.99),
+        max: lags[lags.len() - 1],
+    })
 }
 
 /// When the event behind a mark happened.

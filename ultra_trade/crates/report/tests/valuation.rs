@@ -426,3 +426,84 @@ fn the_drawdown_of_a_session_that_never_lost_is_zero() {
     let r = summarize(&log, 1, MID).expect("summary");
     assert_eq!(r.max_drawdown, Notional::ZERO);
 }
+
+// ---- how stale the data was ----------------------------------------------
+
+/// A market event stamped at `sent` and observed at `seen`.
+fn late_quote(seq: u64, sent: i64, seen: i64) -> Record {
+    record(
+        seq,
+        Event::In(Inbound::Market(MarketEvent {
+            instrument: A,
+            exchange_time: at(sent),
+            receive_time: Timestamp::from_nanos(seen),
+            kind: MarketKind::Quote {
+                bid_px: px(99),
+                bid_qty: qty(10),
+                ask_px: px(101),
+                ask_qty: qty(10),
+            },
+        })),
+    )
+}
+
+const MS: i64 = 1_000_000;
+
+#[test]
+fn the_feed_lag_is_measured_from_the_two_clocks_on_each_event() {
+    let log = vec![
+        late_quote(0, 1_000, 1_000 + 5 * MS),
+        late_quote(1, 2_000, 2_000 + 10 * MS),
+        late_quote(2, 3_000, 3_000 + 15 * MS),
+        late_quote(3, 4_000, 4_000 + 20 * MS),
+    ];
+    let lag = summarize(&log, 1, MID)
+        .expect("summary")
+        .feed_lag
+        .expect("lag");
+    assert_eq!(lag.events, 4);
+    assert_eq!(lag.min, 5 * MS);
+    assert_eq!(lag.max, 20 * MS);
+    assert_eq!(lag.p50, 10 * MS, "nearest-rank, so a lag some event had");
+}
+
+#[test]
+fn the_tail_is_reported_separately_because_an_average_hides_it() {
+    // Ninety-nine fast events and one terrible one: the mean barely moves and
+    // p99 is the whole story. A budget lives or dies on the tail.
+    let mut log: Vec<Record> = (0..99)
+        .map(|n| late_quote(n, 1_000 * (n as i64 + 1), 1_000 * (n as i64 + 1) + MS))
+        .collect();
+    log.push(late_quote(99, 200_000, 200_000 + 9_000 * MS));
+
+    let lag = summarize(&log, 1, MID)
+        .expect("summary")
+        .feed_lag
+        .expect("lag");
+    assert_eq!(lag.p50, MS);
+    assert_eq!(lag.max, 9_000 * MS);
+    assert_eq!(lag.p99, MS, "99 of 100 events were fast");
+}
+
+#[test]
+fn a_clock_behind_the_venues_shows_as_a_negative_lag() {
+    // Skew is reported, not clamped: it is the condition that makes every
+    // other lag figure in the same run untrustworthy.
+    let log = vec![
+        late_quote(0, 5_000, 4_000),
+        late_quote(1, 6_000, 6_000 + MS),
+    ];
+    let lag = summarize(&log, 1, MID)
+        .expect("summary")
+        .feed_lag
+        .expect("lag");
+    assert_eq!(lag.min, -1_000);
+}
+
+#[test]
+fn a_recording_with_no_market_events_reports_no_lag_rather_than_zero() {
+    // Zero would read as "the feed was instant", which is a different claim
+    // from "nothing was measured".
+    let log = vec![submitted(0, 0, A, Side::Buy), filled(1, 0, 100, 10)];
+    assert!(summarize(&log, 1, MID).expect("summary").feed_lag.is_none());
+}

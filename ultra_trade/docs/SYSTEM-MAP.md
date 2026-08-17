@@ -65,8 +65,10 @@ the question people ask first, so here is the whole path:
 
 ```mermaid
 graph LR
-    K["Kraken<br/>public REST API"] -->|HTTPS| BR["tools/kraken-bridge.py<br/><i>outside the workspace</i>"]
+    K["Kraken<br/><b>websocket</b>"] -->|"wss, streaming"| BR["tools/kraken-stream.py<br/><i>outside the workspace</i>"]
+    K2["Kraken<br/>REST"] -.->|"polled, ~5s behind"| BR2["tools/kraken-bridge.py<br/><i>the older one</i>"]
     BR -->|"one text line per event"| F["FIFO or file"]
+    BR2 -.-> F
     F --> LF["crates/adapters/live<br/>LiveFeed"]
     LF -->|"Inbound events"| EN["engine"]
     STDIN["operator typing<br/>halt / resume / kill / flatten"] --> LF
@@ -85,10 +87,25 @@ and websocket stack never enters a real-money binary as a side effect of wanting
 market data — the trading system still has **zero third-party dependencies**. A
 bridge for a different venue is a new script, not a new crate.
 
-**What it costs, measured.** Polling REST rather than reading a stream puts the
-data path about **6 seconds behind the market** (median, with a 3-second poll;
-max 37s observed). Fine for paper. Disqualifying for any latency work, which is
-worth knowing before anyone tries to measure a latency budget.
+**What it costs, measured.** Both bridges emit the same lines, so the choice is
+purely how stale the data is. `journal` now measures that from a recording's own
+timestamps:
+
+```text
+                    p50        p90        p99        max
+  streaming        82ms       163ms     1,046ms    4,153ms
+  polling        5,240ms    24,484ms   50,273ms   57,748ms
+```
+
+Sixty-four times better at the median and forty-eight at the tail, over 639 and
+228 real market events. The polling bridge is kept because it needs nothing but
+HTTPS and is useful when a websocket is blocked, but it is no longer the one to
+reach for — and its tail is far worse than the "about six seconds" this document
+used to claim, which is what happens when a number is estimated instead of
+measured.
+
+Streaming makes latency *measurable*. It does not make it *good*: 82ms is a
+data path, not a trading edge.
 
 ---
 
@@ -198,7 +215,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `harness` | one configured run over a recording, and splitting one | which tool asked for it |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**25,400 lines, 450 tests, zero third-party dependencies** in the trading path.
+**25,700 lines, 454 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -208,6 +225,14 @@ one exists. That is what keeps a test able to build a session in three lines.
 **A price is not a quantity.** `px + qty` does not compile. Neither does
 `px * qty` — the product is `px.notional(qty, RoundDir::Down)`, which forces the
 caller to say which way it rounds. There is no default rounding anywhere.
+
+**Three clocks that never mix — with one measured exception.** Exchange time
+and receive time are on every event and, until rung 8, nothing had ever
+compared them: the comparison does not compile. Measuring how stale the feed is
+*requires* it, and `CONTEXT.md` names that as the one thing receive time is
+for, so there is exactly one function that does it — `types::feed_lag_nanos` —
+documented as a measurement that nothing on the order path may call. The count
+of sanctioned cross-clock operations is now two, and both are named.
 
 **Three clocks that never mix.** Exchange time, receive time and monotonic time
 are different types. Subtracting one from another does not compile. That is why

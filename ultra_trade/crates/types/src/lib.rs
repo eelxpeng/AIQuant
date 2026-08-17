@@ -50,7 +50,7 @@ pub use money::{Notional, Px, Qty};
 pub use rounding::RoundDir;
 pub use time::{
     ClockKind, Exchange, ExchangeSpan, ExchangeTime, Monotonic, MonotonicSpan, MonotonicTime,
-    Receive, ReceiveSpan, ReceiveTime, Span, Timestamp,
+    Receive, ReceiveSpan, ReceiveTime, Span, Timestamp, feed_lag_nanos,
 };
 
 /// Scale units per whole unit — every value is an exact integer multiple of
