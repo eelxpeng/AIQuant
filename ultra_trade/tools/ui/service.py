@@ -45,11 +45,14 @@ class Tools:
             )
         return done.stdout
 
-    def session(self, with_fills):
-        args = [self.recording, "--json"]
+    def session(self, with_fills, tail=1500):
+        args = [self.recording, "--json", "--tail", str(tail)]
         if with_fills:
             args.append("--fills")
-        return json.loads(self._run("journal", args, timeout=60))
+        # A long session's recording is large and `journal` walks all of it, so
+        # this is the call that gets slower as a session runs. The page paces
+        # itself off `read_took_ms` rather than assuming it stays fast.
+        return json.loads(self._run("journal", args, timeout=120))
 
     def sweep(self, config, vary, split):
         args = [self.recording, config, "--json"]

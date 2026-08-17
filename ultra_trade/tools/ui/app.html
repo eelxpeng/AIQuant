@@ -83,6 +83,7 @@
   <h1>ultra_trade</h1>
   <span id="where" class="stale"></span>
   <span id="freshness" class="stale"></span>
+  <span id="pace" class="stale"></span>
 </header>
 
 <main>
@@ -349,6 +350,11 @@ function render(d) {
 
   if (d.fills) {
     curve(d.fills);
+    if (d.fills_omitted) {
+      el("alerts").innerHTML +=
+        `<div class="banner warn">${d.fills_omitted} earlier fills are not shown;
+         the curve starts part-way through. The totals above are complete.</div>`;
+    }
     const recent = d.fills.slice(-40).reverse();
     el("fills").innerHTML = rows(
       ["seq", "instrument", "side", "qty", "price", "fee", "position", "realized"],
@@ -374,7 +380,7 @@ function render(d) {
     }
   }
 
-  ladders(d.book);
+  ladders(d.ladder);
   el("controls").hidden = !d.can_control;
 }
 
@@ -513,6 +519,25 @@ document.querySelectorAll("#controls button").forEach((b) =>
   })
 );
 
-poll();
-setInterval(poll, 1000);
+// The read is O(records), so a session that runs for hours makes it slower
+// and slower. Polling on a fixed timer would eventually mean one read
+// finishing as the next begins, and the machine doing nothing but re-reading
+// the log. So the page paces itself: roughly ten times the last read's cost,
+// between one second and a minute, and it says what it settled on.
+let interval = 1000;
+
+async function loop() {
+  const started = Date.now();
+  await poll();
+  const took = Date.now() - started;
+  interval = Math.min(60000, Math.max(1000, took * 10));
+  const pace = el("pace");
+  if (pace) {
+    pace.textContent =
+      interval > 1500 ? `polling every ${(interval / 1000).toFixed(1)}s` : "";
+  }
+  setTimeout(loop, interval);
+}
+
+loop();
 </script>

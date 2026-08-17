@@ -107,12 +107,15 @@ try:
         failures.append("the read path must say how long it took (ADR D-7)")
     if not isinstance(body["totals"]["total"], str):
         failures.append("money must be a string, never a JSON number")
-    if "book" not in body:
-        failures.append("the read path must carry the book for the ladder")
+    if "ladder" not in body:
+        failures.append("the read path must carry the ladder")
     else:
         for side in ("bids", "asks", "working"):
-            if side not in body["book"][0]:
+            if side not in body["ladder"][0]:
                 failures.append(f"the ladder needs {side}")
+    # Two keys with one name is a key silently lost, and this pair collided.
+    if not isinstance(body.get("book"), dict) or "resyncs" not in body["book"]:
+        failures.append("the reset counts must survive under their own name")
 
     # The whole reason the viewer is a separate program.
     status, body = post(base + "/api/command", {"command": "kill"})
