@@ -31,7 +31,7 @@ use event::codec::LogHeader;
 use event::{Outbound, Segments};
 use harness::Costs;
 use marketdata::{BarSpec, MarkRule};
-use sim_venue::FillModel;
+use sim_venue::{FillModel, Queue};
 
 /// How an open position is valued in the summary.
 ///
@@ -59,6 +59,8 @@ fn usage() -> ! {
     eprintln!("  recorded.log   a session written by `record` or `paper`");
     eprintln!("  --walk-book    fill through the levels behind the touch, which needs");
     eprintln!("                 a recording made with a depth feed");
+    eprintln!("  --queue-behind queue a resting order behind whatever was already at");
+    eprintln!("                 its price, instead of assuming it is first");
     eprintln!("  session.conf   limits and strategies for this run; without it,");
     eprintln!("                 wide limits and one crossover on the first instrument");
     eprintln!();
@@ -128,6 +130,12 @@ fn main() {
     // reads as "depth made no difference" rather than "there was no depth".
     let walk = args.iter().any(|a| a == "--walk-book");
     args.retain(|a| a != "--walk-book");
+    // The simulator's most optimistic assumption is that a resting order is
+    // first in the queue at its price. This waits behind whatever was already
+    // there, which is closer to how a venue works and worse for any strategy
+    // that earns its money passively.
+    let behind = args.iter().any(|a| a == "--queue-behind");
+    args.retain(|a| a != "--queue-behind");
     let Some(path) = args.first() else { usage() };
     if args.len() > 2 {
         usage();
@@ -190,6 +198,7 @@ fn main() {
         } else {
             FillModel::TouchDisplayed
         },
+        queue: if behind { Queue::Behind } else { Queue::Front },
         ..Costs::DEFAULT
     };
     let summary = match harness::backtest(&header, &records, &session, costs, MARK_RULE) {

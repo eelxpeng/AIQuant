@@ -3,198 +3,190 @@
 What is built, what is not, and where the work is up to.
 
 `README.md` says what this is. `docs/SYSTEM-MAP.md` says how the pieces fit
-together. **This file says how far along it is** — it is the first thing to read
+together. **This file says how far along it is** — the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **27,000 lines, 483 tests, 15 crates, 5 binaries, zero third-party
+Today: **27,400 lines, 490 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path.
 
 ---
 
 ## The ladder
 
-Each rung is a thing the system can do that it could not do before. A rung is
-ticked only when it works end to end from a command line, not when its parts
-exist.
+Each rung is something the system can do that it could not do before. A rung
+ticks when it works end to end from a command line, not when its parts compile.
 
 - [x] **1 · A deterministic engine.** Market event in, order out, through a risk
-      gate, recorded to a log. Same input, byte-identical output.
+      gate, recorded. Same input, byte-identical output.
 - [x] **2 · A session survives leaving the process.** A recording is a file with
       a stable format, and it reads back.
 - [x] **3 · Backtest.** Run a strategy over a recording and get numbers out.
 - [x] **4 · Paper trading.** A live market, a real clock, an operator who can
-      halt it, and a simulated venue so nothing can lose money.
+      halt it, a simulated venue so nothing can lose money.
 - [x] **5 · A session survives a crash.** Restart, rebuild what was held, come
-      back halted, and wait for a human.
-- [x] **6 · Trustworthy results.** A session's headline is now a complete
-      profit-and-loss: realized plus the open position marked to market, with
-      the rule and the timestamp stated, and a refusal rather than a zero when
-      a position cannot be valued.
-- [x] **7 · Research throughput.** Run a grid of configurations over one
-      recording in one command, ranked, and measured out of sample so the
-      in-sample winner can be caught being luck.
-- [x] **8 · A real venue, read-only.** Real market data over a real streaming
-      connection, still trading against the simulator — and the first
-      measurement of how stale that data is.
-- [ ] **9 · Live.** ← **you are here**, and standing well back. Real orders,
-      real money. Everything above has to be true first, rung 8 has to have run
-      for a long time without surprises, and this repository has never held a
-      credential — where a key lives is undecided and is a prerequisite.
+      back halted, wait for a human.
+- [x] **6 · Trustworthy results.** A complete profit-and-loss: realized plus the
+      open position marked to market, with the rule and timestamp stated.
+- [x] **7 · Research throughput.** A grid of configurations over one recording,
+      ranked, measured out of sample.
+- [x] **8 · A real venue, read-only.** Streaming market data with depth and
+      checksums, still trading against the simulator.
+- [ ] **9 · Believable fills.** ← **you are here.** The simulator's remaining
+      optimism named and bounded, so a backtest result can be argued for rather
+      than merely produced.
+- [ ] **10 · Somewhere to look.** A UI: watch a live session, read a recording,
+      compare a sweep, and press the buttons — without a terminal.
+- [ ] **11 · Sustained operation.** Rung 8 run for days rather than minutes,
+      with the failures that only appear at that timescale.
+- [ ] **12 · Live.** Real orders, real money.
 
-Rungs 1–8 took PRs #7 to #32. Rung 9 is deliberately far away, and
-nothing below should be read as saying it is close.
+Rungs 1–8 took PRs #7 to #33. Rung 12 is deliberately far away and nothing
+below should be read as saying otherwise.
+
+---
+
+## What needs building
+
+Ordered within each theme by what I would pick up first. Every item is meant to
+be startable from what is written here.
+
+### 1 · Believable fills — rung 9
+
+The simulator is a model, and the honest question is not "is it right" but
+"which way is it wrong, and by how much". Each of these is a known lie with an
+unknown size.
+
+- [x] **Queue position** (#33). A resting order used to fill on the first print
+      at its price; it now waits behind the size that was already there. On a
+      quoter joining a level with four ahead of it: **200 fills → 66**, and the
+      profit fell to a third. Off by default.
+- [ ] **Cancellations do not move you up the queue.** Deliberately pessimistic:
+      a level shrinking says somebody left, not whether they were ahead of us.
+      A proportional model would be closer to reality and needs a defensible
+      rule rather than a tuned constant.
+- [ ] **Market impact.** The biggest remaining lie. The recorded book is what
+      the market showed *without* our order in it; walking it assumes the levels
+      would have sat still while we ate them. Even a crude size-proportional
+      slippage term, clearly labelled a model rather than data, beats the
+      current silence.
+- [ ] **Hidden liquidity.** Displayed size is not all the size, in either
+      direction. Unmodelled and unmeasured.
+- [ ] **Latency between decision and arrival.** `SimVenue` takes a constant
+      `latency` and every session passes zero, so a strategy reacting to a quote
+      is assumed to be at the venue instantly.
+
+### 2 · Somewhere to look — rung 10
+
+Everything today is a terminal and a text file. This is the largest single gap
+by user-visible surface, and it absorbs the `client` process outstanding since
+the architecture doc was written.
+
+- [ ] **A read-only web view of a recording.** Equity curve, fills, refusals,
+      the book at a chosen moment, feed-lag distribution. `journal` already
+      derives all of it; this is presentation, and it is where a person would
+      actually notice a session doing something strange.
+- [ ] **A live session monitor.** Position, working orders, P&L, feed lag,
+      engine state, updating as the session runs. Reads the recording as it is
+      written — no new path into the engine.
+- [ ] **Sweep results as a sortable table**, in-sample and out-of-sample side by
+      side with the rank change highlighted. `sweep` prints this today; a table
+      you can sort is a different tool.
+- [ ] **The operator console** — halt, resume, kill, flatten — which *is* the
+      `client` process. The one part that **writes**, so the part to build last
+      and most carefully.
+
+**The architectural constraint, decided in advance.** A web server does not go
+in the Rust workspace. The trading path has zero third-party dependencies and a
+UI is not a reason to acquire the first one — the same rule that keeps the venue
+bridges in `tools/`. The seam already exists: a recording is a file with a
+documented format and `journal` already turns it into numbers, so the UI reads
+that. For the console, the line protocol on stdin is already the control
+surface; a UI writes to it rather than reaching into the engine.
+
+Wants an ADR before code, like the crash-recovery contract: what the UI may
+read, what it may write, and what happens when it disconnects mid-command.
+
+### 3 · Research quality
+
+Making it harder to fool yourself.
+
+- [ ] **Rolling walk-forward.** `sweep --split` is one experiment; six
+      consecutive train/test windows are a different quality of evidence.
+      `harness::split_by_market_events` generalises to it.
+- [ ] **Risk-adjusted ranking.** `sweep` sorts on total, which picks the most
+      levered variant every time. Hit rate, average edge per fill and
+      return-over-drawdown all come from data already in the log.
+- [ ] **Per-round-trip results**, which hit rate needs. `oms` matches lots FIFO
+      and does not record individual round trips; that is a change to position
+      accounting and wants surfacing before it is made.
+
+### 4 · Market data
+
+- [ ] **A second venue.** Everything venue-specific is in `tools/`, which is the
+      claim this would test. The checksum is Kraken's algorithm and a second
+      venue needs its own.
+- [ ] **Duplicate detection.** Out-of-order events are refused; duplicates need
+      a venue sequence number no feed has given us yet.
+- [ ] **Depth beyond the top levels.** The bridge subscribes to ten a side and
+      `Books` holds sixteen. A strategy trading real size wants more, and the
+      log volume grows with it.
+
+### 5 · Going live — rung 12
+
+- [ ] **Where a credential lives.** This repository has never held one. How a
+      key is stored, how it reaches the process, and how it is kept out of a log
+      and a core dump is undecided — a prerequisite, not a detail.
+- [ ] **`bin/live` and a real venue adapter.** Nothing can lose money until this
+      exists, which is by construction.
+- [ ] **D-3 against a real venue** — ask it for its open orders and cancel by
+      *its* list. The current form cancels what the reconstructed simulated
+      venue holds.
+- [ ] **`EngineState::Recovering`** (contract D-6), a wire-format change that
+      only earns its cost alongside a real venue.
+- [ ] **Reconnect idempotency** — a venue-side order id that survives a
+      reconnect. Unanswered since the log-format ADR.
+
+### 6 · Operations — rung 11
+
+- [ ] **A declared latency budget.** The hot path (~88 ns/event) and the feed
+      (~70 ms p50) are both measured; nothing says what either is *allowed* to
+      be. The constitution asks a hot-path change to cite a benchmark against
+      the budget, and there is no budget to cite against.
+- [ ] **End-to-end latency.** The two halves are measured separately; nothing
+      measures wire to order.
+- [ ] **A multi-day paper session.** Everything run so far is seconds to
+      minutes. Log volume, background-writer backpressure, reconnects, resyncs
+      and recovery under real conditions are untested at the timescale that
+      matters. This is what earns rung 12, and no feature substitutes for it.
+
+### 7 · Small, known, and deliberately left
+
+- [ ] **`session_start` in the log header is always zero.** At header-write time
+      no exchange clock has been observed, and a receive time in an
+      exchange-time field is the mixing the types forbid. Deciding what the
+      field should hold is an event-schema change.
+- [ ] **Two format bumps in two PRs** (2 for depth, 3 for the reset). Both were
+      avoidable with more foresight. Nothing to fix; a note to do better.
+- [ ] **`report` recomputes the book** to get a mark. Correct, and it means a
+      report walks every market record twice over a long session.
 
 ---
 
 ## Built
 
-### The engine and its seams
+Summarised; `docs/SYSTEM-MAP.md` has the detail.
 
-- [x] Fixed-point `Px` / `Qty` / `Notional`; no float anywhere near an order (#7)
-- [x] Source-typed clocks — exchange, receive, monotonic cannot be mixed (#7)
-- [x] Event log, market data, risk gate, order state machine, strategy trait,
-      engine loop (#8)
-- [x] Market events that arrive out of order are refused, not applied (#10)
-- [x] Compile-level proofs: a strategy cannot reach the venue, the book, or a
-      later event (#12)
-- [x] The kill switch works from every state (#13)
-- [x] A 10,000-event replay reproduces byte-identically (#11)
-- [x] Zero-allocation hot path, proved by a counting allocator under CI (#8)
-
-### The recording
-
-- [x] Fixed 80-byte records, CRC per record, explicit wire discriminants (#14, #15)
-- [x] Reader and writer, with every damage mode reported rather than swallowed (#16)
-- [x] A recording replays as a feed — backtest and replay are different readings (#17)
-- [x] Recording happens off the hot path, on a background writer (#19)
-- [x] A session is a **chain of segments**, so a crash never rewrites evidence (#24)
-
-### Running it
-
-- [x] `record` — make a recording from a synthetic market (#18)
-- [x] `backtest` — run a strategy over a recording (#18)
-- [x] `paper` — a live feed, a real clock, an operator console (#21)
-- [x] `journal` — read a recording back: decisions, fills, PnL curve (#23)
-- [x] One session config drives all of them; multi-instrument (#23)
-- [x] `cargo bench -p engine` — the hot path, ~88 ns/event (#25)
-- [x] `sweep` — a grid of configs over one recording, in and out of sample (#29)
-- [x] `harness` — one definition of what a backtest is, shared by both (#29)
-
-### Fault tolerance
-
-- [x] Crash-recovery contract, written before the code (#20)
-- [x] Restart replays its own recording to rebuild state (#25)
-- [x] It comes back **halted**; only an operator resumes it (#25)
-- [x] Replay and recording are compared per instrument; a disagreement refuses
-      to start (#25)
-- [x] Whatever was resting is cancelled on restart (#26)
-
-### Strategies
-
-- [x] `crossover` — takes liquidity with market orders (#8)
-- [x] `quote` — rests a bid and an ask, and pulls them (#26)
-- [x] A strategy learns its order's id, and can cancel it (#26)
-
-### Verified against a real market
-
-- [x] Kraken paper session, two instruments, backtest of its own recording
-      reproduces it **per instrument** (#23)
-- [x] A killed paper session resumed, traded on, and the two segments read back
-      as one (#25)
-
----
-
-## Not built
-
-Ordered by what I would do next, not by size.
-
-### Fill realism
-
-- [x] `FillModel::WalkBook` — an order eats levels outwards and pays each one's
-      own price (#31)
-- [ ] **Market impact.** The recorded book is what the market showed *without*
-      our order in it. Walking it assumes the levels would have sat still.
-- [ ] **Queue position.** A resting order still assumes the front of the queue.
-      Depth says how much is at a price, not how much is ahead of us at it.
-
-### Reporting
-
-- [x] **Mark-to-market** — realized, unrealized, and a total, per instrument
-      and per session (#28)
-- [x] **The mark rule and its timestamp are reported**, because two rules give
-      two answers over one log (#28)
-- [x] **A position with no usable mark is named, not valued at zero** (#28)
-- [x] **Drawdown is marked to market** — it was realized-only, which missed
-      every fall a session rode out in an open position (#28)
-- [ ] Sharpe, hit rate, average edge per fill — the numbers that make a quoter
-      and a crossover comparable on more than one number. These belong with
-      rung 7: they exist to rank runs against each other.
-
-### Research throughput
-
-- [x] `sweep` — a grid of variants over one recording, ranked by what each was
-      worth, in one command (#29)
-- [x] `--split` measures every variant out of sample and says when the ranking
-      rearranged, which is what overfitting looks like (#29)
-- [x] A sweep with no split nags about it (#29)
-- [ ] **Rolling walk-forward** — many consecutive train/test windows rather
-      than one split. One split is one experiment; a parameter that survives
-      six consecutive windows is a different quality of evidence.
-- [ ] Sharpe, hit rate, average edge per fill. The table ranks on total, which
-      says nothing about how much risk bought it — `total` and `drawdown` side
-      by side is the poor version of that.
-
-### Market data
-
-- [x] `tools/kraken-stream.py` — a streaming websocket bridge, stdlib only (#30)
-- [x] `types::feed_lag_nanos` — the one sanctioned comparison of the exchange
-      and receive clocks, and the first time either was measured against the
-      other (#30)
-- [x] `journal` reports the lag distribution, and shouts about clock skew (#30)
-- [ ] **A declared latency budget.** The hot path and the feed are both
-      measured now, so a budget is finally *possible* to state. Nothing states
-      one, so the constitution's "cite a benchmark against the budget" still
-      has no budget to cite against.
-- [x] **Order-book depth** — the feed, the log, the book and a fill model that
-      walks it (#31, ADR `1-order-book-depth.md`)
-- [x] **Book checksums** — the bridge verifies the venue's CRC over its own
-      copy of the book and resynchronises when it fails; the reset is recorded
-      and counted (#32)
-- [ ] The checksum is Kraken's, in the bridge. A second venue needs its own,
-      because the algorithm is venue-specific down to the digit formatting.
-
-### Towards live — rung 9
-
-- [ ] `bin/live` and a real venue adapter. Nothing can lose money until this
-      exists, which is by construction and not an accident.
-- [ ] **An authenticated connection.** The streaming feed is public data and
-      needs no credentials. Sending an order needs a key, and this repository
-      has never held one — where a key lives and how it is kept out of a log is
-      undecided and is a prerequisite, not a detail.
-- [ ] **D-3 against a real venue** — ask the venue for its open orders and
-      cancel by *its* list. The current form cancels what the *reconstructed*
-      simulated venue holds. A real venue has to be asked.
-- [ ] **`EngineState::Recovering`** (contract D-6). It is wire-encoded in the
-      log, so it costs a format version bump, and it only earns that when there
-      is a real venue to reconcile against.
-- [ ] Reconnect idempotency — a venue-side order id that survives a reconnect.
-      Unanswered since the log-format ADR.
-
-### Smaller, known, and deliberately left
-
-- [ ] **`session_start` in the log header is always zero.** At header-write time
-      no exchange clock has been observed, and a receive time in an
-      exchange-time field is the mixing the type system exists to prevent.
-      Deciding what the field should hold is an event-schema change.
-- [ ] **Duplicate market events.** Out-of-order events are refused; duplicates
-      need a venue sequence number no feed has given us.
-- [ ] **No declared latency budget.** The hot path is now measured, so changes
-      can be *compared*, but nothing says what the number is allowed to *be*.
-      The constitution asks a hot-path change to cite a benchmark against a
-      budget; there is no budget to cite against.
-- [ ] **End-to-end latency** — the feed's lag is measured and the engine's step
-      is benchmarked, but nothing measures the whole path from wire to order.
-- [ ] **No separate `client` process.** Operator commands come from stdin.
+| Area | What works | PRs |
+|---|---|---|
+| Types | fixed-point money, source-typed clocks, one sanctioned cross-clock measurement | #7, #30 |
+| Engine | deterministic loop, risk gate, order machine, FIFO accounting, kill switch | #8, #13 |
+| Recording | 80-byte records, CRC, background writer, segment chains, format 3 | #14–#19, #24, #31, #32 |
+| Running it | `record`, `backtest`, `paper`, `journal`, `sweep` | #18, #21, #23, #29 |
+| Recovery | replay-based, halted on return, per-instrument reconciliation, resting orders cancelled | #25, #26 |
+| Strategies | crossover (takes), quoter (rests and cancels) | #8, #26 |
+| Results | mark-to-market, marked drawdown, out-of-sample sweeps | #28, #29 |
+| Market data | streaming websocket, depth, venue checksums, lag measurement | #30, #31, #32 |
+| Fills | touch, walk-the-book, queue position | #31, #33 |
 
 ---
 
@@ -202,8 +194,8 @@ Ordered by what I would do next, not by size.
 
 - A rung ticks when the thing works from a command line, not when its parts
   compile.
-- Land a change, update this file in the same PR, and cite the PR number.
+- Land a change, update this file in the same PR, cite the PR number.
 - An item that has been "next" for a long time is either not next or not real.
   Say which.
-- This file records **state**, not plans. Priority and scope splits are the
-  human's, and the roadmap issue (#1) is still where those live.
+- This file records **state**. Priority and scope splits are the human's, and
+  the roadmap issue (#1) is where those live.

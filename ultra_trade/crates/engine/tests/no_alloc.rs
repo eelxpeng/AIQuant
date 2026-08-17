@@ -12,7 +12,7 @@ use engine::{Engine, EngineConfig, FeedAdapter};
 use event::{MemoryLog, OrderKind};
 use marketdata::{Aggregator, BarSpec};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use simkit::{Script, qty};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -98,6 +98,7 @@ fn a_warmed_engine_does_not_allocate_while_processing_an_event() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );

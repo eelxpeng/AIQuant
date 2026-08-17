@@ -246,6 +246,16 @@ jobs:
           echo "orders: touch=$touch_orders walk=$walk_orders"
           test "$walk_orders" -lt "$touch_orders"
 
+          # Queuing behind the size already at a price must not fill sooner
+          # than assuming you are first. It is the simulator's most optimistic
+          # assumption and the one that flatters passive strategies.
+          front=$(cargo run -p backtest --locked --offline -- "$depth_log" "$conf" \
+            | awk '/^  fills/ {print $2; exit}')
+          behind=$(cargo run -p backtest --locked --offline -- "$depth_log" "$conf" --queue-behind \
+            | awk '/^  fills/ {print $2; exit}')
+          echo "fills: front=$front behind=$behind"
+          test "$behind" -le "$front"
+
           # A sweep over the recording: a grid of variants, split in and out of
           # sample. The nag when there is no split is load-bearing, so it is
           # checked too — a sweep whose top row gets picked with no

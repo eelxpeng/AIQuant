@@ -28,7 +28,7 @@ use event::{
 use marketdata::{Aggregator, BarSpec, BarSubscription};
 use oms::VenueAdapter;
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use simkit::ReplayVenue;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -268,6 +268,7 @@ fn run_live(events: Vec<Inbound>) -> Engine<SimVenue, MemoryLog> {
     let venue = SimVenue::new(
         INSTRUMENTS,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees {
             maker: Px::ZERO,
             taker: Px::from_scaled(SCALE / 100),

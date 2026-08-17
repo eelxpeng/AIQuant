@@ -8,7 +8,7 @@
 
 use event::{Inbound, MarketEvent, MarketKind, OrderKind, VenueKind};
 use oms::{Order, VenueAdapter};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use types::{ExchangeSpan, InstrumentId, OrderId, Px, Qty, SCALE, Side, StrategyId, Timestamp};
 
 const I: InstrumentId = InstrumentId::new(0);
@@ -22,7 +22,13 @@ fn qty(whole: i64) -> Qty {
 }
 
 fn venue(model: FillModel) -> SimVenue {
-    SimVenue::new(1, model, Fees::NONE, ExchangeSpan::from_nanos(0))
+    SimVenue::new(
+        1,
+        model,
+        Queue::Front,
+        Fees::NONE,
+        ExchangeSpan::from_nanos(0),
+    )
 }
 
 fn market(at: i64, kind: MarketKind) -> MarketEvent {
@@ -198,4 +204,140 @@ fn a_limit_that_does_not_reach_the_touch_fills_nothing() {
         fills(&mut v).is_empty(),
         "a bid below the ask takes nothing"
     );
+}
+
+// ---- where we sit in the queue -------------------------------------------
+
+fn queuing(queue: Queue) -> SimVenue {
+    SimVenue::new(
+        1,
+        FillModel::TouchDisplayed,
+        queue,
+        Fees::NONE,
+        ExchangeSpan::from_nanos(0),
+    )
+}
+
+fn rest_buy(v: &mut SimVenue, id: u64, size: i64, price: i64) {
+    v.submit(&buy(id, size, OrderKind::Limit(px(price))))
+        .expect("submit");
+    let mut drained = Vec::new();
+    v.drain(&mut drained);
+}
+
+fn print_trade(v: &mut SimVenue, at: i64, price: i64, size: i64) {
+    v.observe_market(&market(
+        at,
+        MarketKind::Trade {
+            px: px(price),
+            qty: qty(size),
+            aggressor: Side::Sell,
+        },
+    ));
+}
+
+#[test]
+fn at_the_front_a_resting_order_fills_on_the_first_print() {
+    // The old behaviour, kept because every result so far was measured on it.
+    let mut v = queuing(Queue::Front);
+    ladder(&mut v);
+    rest_buy(&mut v, 0, 2, 100);
+    print_trade(&mut v, 20, 100, 2);
+    assert_eq!(fills(&mut v), vec![(100, 2)]);
+}
+
+#[test]
+fn behind_the_queue_the_size_already_there_is_consumed_first() {
+    // Four are resting at 100 before we join. A print of two fills none of
+    // ours: it belongs to the people who were there first.
+    let mut v = queuing(Queue::Behind);
+    ladder(&mut v); // bids: 4 @ 100, 9 @ 99
+    rest_buy(&mut v, 0, 2, 100);
+    print_trade(&mut v, 20, 100, 2);
+    assert!(
+        fills(&mut v).is_empty(),
+        "the queue ahead of us has not cleared"
+    );
+}
+
+#[test]
+fn once_the_queue_clears_the_rest_of_the_print_reaches_us() {
+    let mut v = queuing(Queue::Behind);
+    ladder(&mut v); // 4 resting at 100
+    rest_buy(&mut v, 0, 2, 100);
+    // Six trade: four clear the queue, two are ours.
+    print_trade(&mut v, 20, 100, 6);
+    assert_eq!(fills(&mut v), vec![(100, 2)]);
+}
+
+#[test]
+fn the_queue_is_consumed_across_several_prints() {
+    // A queue does not reset between trades, which is the whole point of
+    // remembering it rather than recomputing it each time.
+    let mut v = queuing(Queue::Behind);
+    ladder(&mut v);
+    rest_buy(&mut v, 0, 2, 100);
+    print_trade(&mut v, 20, 100, 3); // 3 of the 4 ahead
+    assert!(fills(&mut v).is_empty());
+    print_trade(&mut v, 30, 100, 3); // 1 clears it, 2 are ours
+    assert_eq!(fills(&mut v), vec![(100, 2)]);
+}
+
+#[test]
+fn joining_a_price_nobody_is_resting_at_puts_us_first() {
+    // Price-time priority: an empty level has no queue, so being behind an
+    // empty one is the same as being at the front of it.
+    let mut v = queuing(Queue::Behind);
+    ladder(&mut v); // nothing at 97
+    rest_buy(&mut v, 0, 2, 97);
+    print_trade(&mut v, 20, 97, 2);
+    assert_eq!(fills(&mut v), vec![(97, 2)]);
+}
+
+#[test]
+fn a_cancellation_does_not_move_us_up_the_queue() {
+    // The deliberately pessimistic part. The displayed size dropping says
+    // somebody left, not whether they were ahead of us — and assuming they
+    // were would hand back fills nobody earned.
+    let mut v = queuing(Queue::Behind);
+    ladder(&mut v); // 4 resting at 100
+    rest_buy(&mut v, 0, 2, 100);
+
+    // The level shrinks to 1 with no trade: three cancelled.
+    v.observe_market(&market(
+        20,
+        MarketKind::Level {
+            side: Side::Buy,
+            px: px(100),
+            qty: qty(1),
+        },
+    ));
+    v.observe_market(&market(20, MarketKind::BookApplied));
+
+    print_trade(&mut v, 30, 100, 2);
+    assert!(
+        fills(&mut v).is_empty(),
+        "we still wait out the queue we joined behind"
+    );
+}
+
+#[test]
+fn with_no_depth_the_touch_still_gives_an_honest_queue() {
+    // A recording made before depth existed still says how much was at the
+    // touch, so an order joining it is not silently put at the front.
+    let mut v = queuing(Queue::Behind);
+    v.observe_market(&market(
+        10,
+        MarketKind::Quote {
+            bid_px: px(100),
+            bid_qty: qty(4),
+            ask_px: px(101),
+            ask_qty: qty(2),
+        },
+    ));
+    rest_buy(&mut v, 0, 2, 100);
+    print_trade(&mut v, 20, 100, 2);
+    assert!(fills(&mut v).is_empty(), "four were there before us");
+    print_trade(&mut v, 30, 100, 4);
+    assert_eq!(fills(&mut v), vec![(100, 2)]);
 }

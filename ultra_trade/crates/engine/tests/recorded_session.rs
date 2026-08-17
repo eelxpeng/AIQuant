@@ -14,7 +14,7 @@ use event::{
 };
 use marketdata::{Aggregator, BarSpec, BarSubscription};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use strategy::MovingAverageCrossover;
@@ -172,6 +172,7 @@ fn sim() -> SimVenue {
     SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     )

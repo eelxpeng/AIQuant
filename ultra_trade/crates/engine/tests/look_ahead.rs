@@ -21,7 +21,7 @@ use engine::{Engine, EngineConfig, FeedAdapter, run};
 use event::{Inbound, MarketEvent, MarketKind, MemoryLog, OrderKind};
 use marketdata::{Aggregator, BarSpec, BarSubscription};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use std::cell::RefCell;
 use std::rc::Rc;
 use strategy::{Context, Strategy, StrategyEvent};
@@ -183,6 +183,7 @@ fn a_strategy_never_observes_a_timestamp_later_than_the_event_in_hand() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );

@@ -67,6 +67,35 @@ pub enum FillModel {
     WalkBook,
 }
 
+/// Where a resting order sits in the queue at its price.
+///
+/// Orthogonal to [`FillModel`], which is about *taking* liquidity: this is
+/// about *providing* it. Folding the two into one enum would multiply out into
+/// names nobody could keep straight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Queue {
+    /// Ours is the only order at its price.
+    ///
+    /// A resting order fills as soon as a trade prints at or through it. The
+    /// most optimistic assumption the simulator makes, and it flatters exactly
+    /// one strategy shape — passive quoting, whose entire profit comes from
+    /// resting fills.
+    Front,
+    /// Everything already resting at our price is ahead of us.
+    ///
+    /// Price-time priority, approximated: the size displayed at a level when
+    /// an order joins it must be consumed by prints before that order fills at
+    /// all.
+    ///
+    /// **The queue only shortens on trades**, never on cancellations. Real
+    /// queues shrink both ways, but a cancellation is invisible from the tape —
+    /// the displayed size dropping says somebody left, not whether they were
+    /// ahead of us or behind. Assuming they were ahead would hand back fills
+    /// nobody earned, so this errs the other way and is pessimistic. Stated,
+    /// rather than tuned until the results look good.
+    Behind,
+}
+
 /// Fees, expressed as money per unit traded.
 ///
 /// Per unit rather than in basis points because a basis-point fee needs a
@@ -102,12 +131,18 @@ struct Resting {
     side: Side,
     limit: Px,
     remaining: Qty,
+    /// Size that was already resting at this price when the order joined.
+    ///
+    /// Consumed by prints before any of `remaining` is. Always zero under
+    /// [`Queue::Front`], which is what makes that setting the optimistic one.
+    ahead: i64,
 }
 
 /// A simulated venue with an explicit fill model.
 #[derive(Debug, Clone)]
 pub struct SimVenue {
     model: FillModel,
+    queue: Queue,
     fees: Fees,
     latency: ExchangeSpan,
     books: Books,
@@ -127,11 +162,13 @@ impl SimVenue {
     pub fn new(
         instruments: usize,
         model: FillModel,
+        queue: Queue,
         fees: Fees,
         latency: ExchangeSpan,
     ) -> SimVenue {
         SimVenue {
             model,
+            queue,
             fees,
             latency,
             books: Books::with_instruments(instruments),
@@ -320,6 +357,41 @@ impl SimVenue {
         Qty::from_scaled(left)
     }
 
+    /// How much is displayed at one price on one side.
+    ///
+    /// From depth where the recording has it, and from the touch where that is
+    /// all there is — a recording made before depth existed still gives an
+    /// honest answer for an order joining the touch, and zero for one joining
+    /// a price the recording never described.
+    fn resting_at(&self, instrument: InstrumentId, side: Side, price: Px) -> i64 {
+        if let Some(depth) = self.books.depth(instrument, side)
+            && !depth.is_empty()
+        {
+            return depth
+                .levels()
+                .iter()
+                .find(|level| level.px == price)
+                .map(|level| level.qty.to_scaled())
+                .unwrap_or(0);
+        }
+        // A maker joins its *own* side: a resting buy sits on the bid. That is
+        // the opposite of `taker_px`, which is what a taker crosses into.
+        match self.books.top(instrument) {
+            Some(top) => {
+                let (level_px, level_qty) = match side {
+                    Side::Buy => (top.bid_px, top.bid_qty),
+                    Side::Sell => (top.ask_px, top.ask_qty),
+                };
+                if level_px == price {
+                    level_qty.to_scaled()
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        }
+    }
+
     /// Fills resting orders against a trade print.
     fn fill_resting(&mut self, instrument: InstrumentId, px: Px, qty: Qty) {
         let mut budget = qty.to_scaled();
@@ -334,6 +406,17 @@ impl SimVenue {
             if !touched || budget <= 0 {
                 index += 1;
                 continue;
+            }
+            // Whoever was already at this price gets the print first. Only
+            // what is left over reaches our order (`Queue::Behind`).
+            if r.ahead > 0 {
+                let eaten = budget.min(r.ahead);
+                self.resting[index].ahead -= eaten;
+                budget -= eaten;
+                if budget <= 0 {
+                    index += 1;
+                    continue;
+                }
             }
             let take = budget.min(r.remaining.to_scaled());
             if take <= 0 {
@@ -427,13 +510,23 @@ impl VenueAdapter for SimVenue {
             // is gone, and saying so is better than leaving a phantom order
             // resting at no price.
             OrderKind::Market => self.report(order.id(), VenueKind::Cancelled),
-            OrderKind::Limit(limit) => self.resting.push(Resting {
-                id: order.id(),
-                instrument: order.instrument(),
-                side: order.side(),
-                limit,
-                remaining: leftover,
-            }),
+            OrderKind::Limit(limit) => {
+                let ahead = match self.queue {
+                    Queue::Front => 0,
+                    // Everyone already at this price got here first. Read from
+                    // the book as it stands now, which is the market without
+                    // our order in it — exactly the size we have to wait out.
+                    Queue::Behind => self.resting_at(order.instrument(), order.side(), limit),
+                };
+                self.resting.push(Resting {
+                    id: order.id(),
+                    instrument: order.instrument(),
+                    side: order.side(),
+                    limit,
+                    remaining: leftover,
+                    ahead,
+                })
+            }
         }
         Ok(())
     }

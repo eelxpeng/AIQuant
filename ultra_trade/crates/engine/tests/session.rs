@@ -10,7 +10,7 @@ use event::{
 use marketdata::{Aggregator, BarSpec, BarSubscription};
 use oms::OrderState;
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use simkit::{ReplayVenue, Script, qty};
 use strategy::{Context, MovingAverageCrossover, Strategy, StrategyEvent};
 use types::{
@@ -60,6 +60,7 @@ fn sim() -> SimVenue {
     SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     )

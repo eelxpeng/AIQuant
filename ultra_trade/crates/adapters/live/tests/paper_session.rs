@@ -10,7 +10,7 @@ use event::{Command, EngineState, MemoryLog, Outbound};
 use live_feed::{LiveFeed, ManualClock, Symbols, commands_from};
 use marketdata::{Aggregator, BarSpec};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use std::time::Duration;
 use strategy::MovingAverageCrossover;
 use types::{
@@ -83,6 +83,7 @@ fn wire<C: types::Clock>(feed: &mut LiveFeed<C>) -> Engine<SimVenue, MemoryLog> 
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );

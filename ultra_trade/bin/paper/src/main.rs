@@ -36,7 +36,7 @@ use event::codec::{InstrumentEntry, LogHeader};
 use event::{BackgroundLog, EngineState, Segments};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
 use recovery::recover;
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use std::fs::File;
 use std::time::{Duration, Instant};
 use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
@@ -134,6 +134,7 @@ fn main() {
     let venue = SimVenue::new(
         instruments.len(),
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees {
             maker: Px::ZERO,
             taker: Px::ZERO,

@@ -20,7 +20,7 @@ use event::{MemoryLog, Record};
 use historical::{HistoricalFeed, Replaying};
 use marketdata::MarkRule;
 use report::{SessionReport, summarize};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use types::{ExchangeSpan, Instrument, OrderId, Px, SCALE, StrategyId, ValueError};
 
 /// What a run charges and how it fills.
@@ -34,6 +34,13 @@ pub struct Costs {
     pub maker: Px,
     /// Charged per unit on a taking fill.
     pub taker: Px,
+    /// Where a resting order sits in the queue at its price.
+    ///
+    /// The most optimistic thing the simulator does is assume it is first, and
+    /// that flatters passive strategies specifically. Here beside the fees for
+    /// the same reason: two policies compared over one recording must meet the
+    /// same venue.
+    pub queue: Queue,
     /// How much of an order the book lets through.
     ///
     /// Here rather than in the session config for the same reason as the fees:
@@ -55,6 +62,10 @@ impl Costs {
         // silently equals this without it, so defaulting to it would tell some
         // recordings they were being walked when they were not.
         model: FillModel::TouchDisplayed,
+        // Front of the queue, matching what every result so far was measured
+        // under. Changing a default silently would move every number in the
+        // repository at once and make this change look like a strategy result.
+        queue: Queue::Front,
     };
 }
 
@@ -130,6 +141,7 @@ pub fn backtest(
     let venue = SimVenue::new(
         instruments.len(),
         costs.model,
+        costs.queue,
         Fees {
             maker: costs.maker,
             taker: costs.taker,

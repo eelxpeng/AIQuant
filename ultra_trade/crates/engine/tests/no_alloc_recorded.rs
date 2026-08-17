@@ -18,7 +18,7 @@ use event::codec::{InstrumentEntry, LogHeader};
 use event::{BackgroundLog, OrderKind};
 use marketdata::{Aggregator, BarSpec};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use simkit::{Script, qty};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::PathBuf;
@@ -113,6 +113,7 @@ fn a_session_being_recorded_to_a_file_does_not_allocate_while_processing_an_even
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );

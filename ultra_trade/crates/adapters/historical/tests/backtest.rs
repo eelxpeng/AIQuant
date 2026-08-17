@@ -13,7 +13,7 @@ use event::{
 use historical::{HistoricalFeed, Replaying};
 use marketdata::{Aggregator, BarSpec, BarSubscription, TopOfBook};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -118,6 +118,7 @@ fn sim() -> SimVenue {
     SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     )
