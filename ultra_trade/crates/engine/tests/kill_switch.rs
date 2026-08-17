@@ -45,7 +45,7 @@ use event::{
 };
 use oms::{Order, OrderState, VenueAdapter, VenueError};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use strategy::{Context, Strategy, StrategyEvent};
 use types::{
     ExchangeSpan, Instrument, InstrumentId, Notional, OrderId, Px, Qty, SCALE, Side, StrategyId,
@@ -456,6 +456,7 @@ fn while_an_order_is_working_at_the_venue() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
@@ -501,6 +502,7 @@ fn while_an_order_is_partly_filled_and_still_working() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
@@ -575,6 +577,7 @@ fn while_every_order_is_already_terminal() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
@@ -660,6 +663,7 @@ fn while_the_venue_never_accepted_anything() {
     let mut venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
@@ -688,6 +692,7 @@ fn while_the_position_disagrees_with_the_venue() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
@@ -725,6 +730,7 @@ fn while_holding_a_long_position() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
@@ -755,6 +761,7 @@ fn while_holding_a_short_position() {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );

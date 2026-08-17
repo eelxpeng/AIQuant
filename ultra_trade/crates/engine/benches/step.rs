@@ -35,7 +35,7 @@ use engine::{Engine, EngineConfig};
 use event::{EventLog, Inbound, MarketEvent, MarketKind, MemoryLog};
 use marketdata::{Aggregator, BarSpec};
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use std::time::Instant;
 use strategy::MovingAverageCrossover;
 use types::{
@@ -89,6 +89,7 @@ fn build<L: EventLog>(log: L) -> Engine<SimVenue, L> {
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );

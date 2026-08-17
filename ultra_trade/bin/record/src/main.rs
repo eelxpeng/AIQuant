@@ -22,7 +22,7 @@ use config::SessionConfig;
 use engine::{Engine, EngineConfig, FeedAdapter, run};
 use event::codec::{InstrumentEntry, LogHeader};
 use event::{Inbound, MarketEvent, MarketKind, Segments};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use types::{ExchangeSpan, OrderId, Px, Qty, SCALE, Side, StrategyId, Timestamp};
 
 const STEP_NANOS: i64 = 1_000_000_000;
@@ -168,6 +168,7 @@ fn main() {
     let venue = SimVenue::new(
         instruments.len(),
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees {
             maker: Px::ZERO,
             taker: Px::from_scaled(SCALE / 100), // 0.01 per unit

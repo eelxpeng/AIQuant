@@ -218,7 +218,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `harness` | one configured run over a recording, and splitting one | which tool asked for it |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**27,000 lines, 483 tests, zero third-party dependencies** in the trading path.
+**27,400 lines, 490 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -461,10 +461,28 @@ to discard everything it holds, including any half-built update. A reset that
 arrives *after* data has flowed is counted separately, because only that one
 means decisions were taken against a book that was wrong.
 
-**What it still does not buy**, because depth invites the belief that a
-backtest is now realistic: market impact (the book would not have sat still
-while we ate it), queue position, and hidden liquidity. Walking a recorded book
-is strictly less wrong than assuming the touch is infinite. It is not right.
+**Queue position is the other thing depth made fixable.** A resting order used
+to fill on the first print at its price — the simulator assuming it was always
+first in the queue, which flatters exactly one strategy shape: passive quoting,
+whose entire profit is resting fills. With depth we know how much was already
+at a price when an order joined it, so `--queue-behind` makes the order wait
+that size out. On a quoter joining a level with four ahead of it:
+
+```text
+                    fills   position   total
+  front of queue      200        200   +20.00
+  behind the queue     66         66    +6.60
+```
+
+Three times fewer fills and a third of the profit. The queue only shortens on
+**trades**, never on cancellations: a level shrinking says somebody left, not
+whether they were ahead of us, and assuming they were would hand back fills
+nobody earned. That is pessimistic, and stated rather than tuned.
+
+**What it still does not buy**: market impact (the book would not have sat
+still while we ate it), hidden liquidity, and any latency between deciding and
+arriving. Walking a recorded book and waiting in its queue is strictly less
+wrong than assuming the touch is infinite and yours. It is not right.
 
 ---
 

@@ -12,7 +12,7 @@ use engine::{Engine, EngineConfig};
 use event::{EngineState, Event, Inbound, MarketEvent, MarketKind, MemoryLog, Outbound, VenueKind};
 use oms::OrderState;
 use risk::{LimitBook, Limits};
-use sim_venue::{Fees, FillModel, SimVenue};
+use sim_venue::{Fees, FillModel, Queue, SimVenue};
 use strategy::Quoter;
 use types::{
     ExchangeSpan, Instrument, InstrumentId, Notional, OrderId, Px, Qty, SCALE, Side, StrategyId,
@@ -63,6 +63,7 @@ fn wire(half_spread: i64, reprice: i64, max_inventory: i64) -> Engine<SimVenue, 
     let venue = SimVenue::new(
         1,
         FillModel::TouchDisplayed,
+        Queue::Front,
         Fees::NONE,
         ExchangeSpan::from_nanos(0),
     );
