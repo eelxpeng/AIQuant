@@ -196,7 +196,7 @@ jobs:
           rm -f "$depth_md" "${depth_log%.log}".*.log
           # The bridge's own logic, with no network: a real checksum vector, the
           # timestamp parser against `datetime`, and the delta bookkeeping.
-          python3 ultra_trade/tools/test-kraken-stream.py
+          python3 tools/test-kraken-stream.py
 
           # A delta feed: each update removes the levels it replaces. A fixture
           # that only ever adds accumulates prices until the book is crossed,
