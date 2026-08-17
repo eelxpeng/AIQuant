@@ -435,3 +435,24 @@ fn a_clean_recovery_says_so_plainly() {
     );
     assert_eq!(recovery.to_string(), "4 records, intact");
 }
+
+#[test]
+fn a_recording_written_before_depth_existed_still_reads() {
+    // Format 2 added the book-level records. The reader refuses only a version
+    // *greater* than it knows, so version-1 files replay unchanged — and this
+    // is the claim that would otherwise rot silently the next time the format
+    // moves (ADR, order-book depth D-4).
+    let temp = TempLog::new("v1-compat");
+    write_session(temp.path(), 5);
+
+    // Rewrite the header's version field to 1, exactly as an older build wrote
+    // it. The records themselves are byte-identical: nothing in a quote or a
+    // trade changed between the versions. The field sits straight after the
+    // eight-byte magic.
+    poke(temp.path(), 8, &1u16.to_le_bytes());
+
+    let mut reader = LogReader::open(temp.path()).expect("a v1 log must still open");
+    assert_eq!(reader.header().format_version, 1);
+    let records = reader.read_all_intact().expect("and still read");
+    assert_eq!(records.len(), 5);
+}

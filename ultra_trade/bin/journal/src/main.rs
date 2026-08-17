@@ -535,6 +535,11 @@ fn describe(
                 MarketKind::Trade { px, qty, aggressor } => {
                     format!("trade {qty} @ {px}, {aggressor:?} took")
                 }
+                MarketKind::Level { side, px, qty } if qty == Qty::ZERO => {
+                    format!("level {side:?} {px} removed")
+                }
+                MarketKind::Level { side, px, qty } => format!("level {side:?} {px} x {qty}"),
+                MarketKind::BookApplied => "book update applied".to_string(),
             };
             (
                 "market",

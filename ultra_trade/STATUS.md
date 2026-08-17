@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — it is the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **25,700 lines, 454 tests, 15 crates, 5 binaries, zero third-party
+Today: **26,600 lines, 478 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path.
 
 ---
@@ -41,7 +41,7 @@ exist.
       for a long time without surprises, and this repository has never held a
       credential — where a key lives is undecided and is a prerequisite.
 
-Rungs 1–8 took PRs #7 to #30. Rung 9 is deliberately far away, and
+Rungs 1–8 took PRs #7 to #31. Rung 9 is deliberately far away, and
 nothing below should be read as saying it is close.
 
 ---
@@ -108,6 +108,15 @@ nothing below should be read as saying it is close.
 
 Ordered by what I would do next, not by size.
 
+### Fill realism
+
+- [x] `FillModel::WalkBook` — an order eats levels outwards and pays each one's
+      own price (#31)
+- [ ] **Market impact.** The recorded book is what the market showed *without*
+      our order in it. Walking it assumes the levels would have sat still.
+- [ ] **Queue position.** A resting order still assumes the front of the queue.
+      Depth says how much is at a price, not how much is ahead of us at it.
+
 ### Reporting
 
 - [x] **Mark-to-market** — realized, unrealized, and a total, per instrument
@@ -146,8 +155,10 @@ Ordered by what I would do next, not by size.
       measured now, so a budget is finally *possible* to state. Nothing states
       one, so the constitution's "cite a benchmark against the budget" still
       has no budget to cite against.
-- [ ] Order-book depth. The feed carries top of book only, so a fill model
-      cannot walk a book it does not have.
+- [x] **Order-book depth** — the feed, the log, the book and a fill model that
+      walks it (#31, ADR `1-order-book-depth.md`)
+- [ ] Book checksums. Kraken publishes one per update and this ignores it, so a
+      dropped delta leaves a book that is quietly wrong rather than refused.
 
 ### Towards live — rung 9
 

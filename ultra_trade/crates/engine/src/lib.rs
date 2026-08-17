@@ -415,18 +415,30 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
         match self.books.apply(&m) {
             Applied::Accepted => {}
             Applied::UnknownInstrument => return Err(EngineError::UnknownInstrument),
-            Applied::OutOfOrder { .. } => {
+            Applied::OutOfOrder { .. } | Applied::UpdateTooLarge => {
                 // The book refused it, so nothing downstream may see it either.
                 // Letting it reach the venue would leave a simulated venue's
                 // book ahead of the engine's; letting it reach the aggregators
-                // would put a bar out of order. `Books` counts the refusal, and
-                // the count is reachable through `books()`.
+                // would put a bar out of order. `Books` counts both refusals,
+                // and the counts are reachable through `books()`.
                 return Ok(());
             }
         }
-        // Unconditional: a simulated venue needs the book to fill against, and
-        // a real one ignores it. No branch here asks which is bound.
+
+        // Unconditional, and *before* the level check below: a simulated venue
+        // keeps its own book and needs the levels to build one. It buffers them
+        // exactly as `Books` does, so it reaches the same state at the same
+        // moment. A real venue ignores this entirely — no branch here asks
+        // which is bound.
         self.venue.observe_market(&m);
+
+        // A level on its own is half an update. It is in the books' buffers,
+        // not in the books, so nothing further may run on it: a strategy would
+        // read a crossed book and an aggregator would take a bar from one
+        // (ADR, order-book depth D-2).
+        if matches!(m.kind, MarketKind::Level { .. }) {
+            return Ok(());
+        }
 
         // Bars whose window closed at or before this event belong *before* it:
         // they describe a period that had already ended when it arrived.
@@ -442,6 +454,17 @@ impl<V: VenueAdapter, L: EventLog> Engine<V, L> {
                     top: &top,
                 });
             }
+            // The update is whole now, so the book has a new top and everyone
+            // may read it. Same event a quote feed would have produced.
+            MarketKind::BookApplied => {
+                if let Some(top) = self.books.top(m.instrument).copied() {
+                    self.dispatch_all(&StrategyEvent::Quote {
+                        instrument: m.instrument,
+                        top: &top,
+                    });
+                }
+            }
+            MarketKind::Level { .. } => {}
             MarketKind::Trade { px, qty, aggressor } => {
                 self.dispatch_all(&StrategyEvent::Trade {
                     instrument: m.instrument,

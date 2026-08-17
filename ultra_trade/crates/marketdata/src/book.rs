@@ -98,6 +98,118 @@ pub struct LastTrade {
     pub exchange_time: ExchangeTime,
 }
 
+/// Levels a side kept by default, matching what a venue commonly publishes.
+const DEFAULT_DEPTH: usize = 16;
+/// Levels one update may carry by default.
+const DEFAULT_PENDING: usize = 64;
+
+/// One price level of the book.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Level {
+    /// Where it rests.
+    pub px: Px,
+    /// How much rests there.
+    pub qty: Qty,
+}
+
+/// The levels of one side, best first.
+///
+/// A fixed-capacity array rather than a map: the hot path may not allocate, and
+/// a depth feed is a delta stream that touches one or two levels an update, so
+/// the cost of keeping it sorted is a memmove of a handful of entries.
+#[derive(Debug, Clone)]
+pub struct Depth {
+    side: Side,
+    levels: Vec<Level>,
+}
+
+impl Depth {
+    /// An empty side that can hold `capacity` levels.
+    pub fn with_capacity(side: Side, capacity: usize) -> Depth {
+        Depth {
+            side,
+            levels: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// The levels, best price first.
+    #[inline]
+    pub fn levels(&self) -> &[Level] {
+        &self.levels
+    }
+
+    /// The best level, if the side has one.
+    #[inline]
+    pub fn best(&self) -> Option<Level> {
+        self.levels.first().copied()
+    }
+
+    /// Whether this side holds nothing.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.levels.is_empty()
+    }
+
+    /// Whether the next insert of a new price would grow the backing store.
+    ///
+    /// The hot path may not allocate, so a caller that cares checks this rather
+    /// than discovering it in a profile (Constitution VI).
+    #[inline]
+    pub fn would_grow(&self) -> bool {
+        self.levels.len() == self.levels.capacity()
+    }
+
+    /// Whether `a` should sort before `b` on this side.
+    ///
+    /// Bids descend and asks ascend, which is the only place in this type that
+    /// knows which side it is.
+    #[inline]
+    fn better(&self, a: Px, b: Px) -> bool {
+        match self.side {
+            Side::Buy => a.to_scaled() > b.to_scaled(),
+            Side::Sell => a.to_scaled() < b.to_scaled(),
+        }
+    }
+
+    /// Sets the size at a price. **Zero removes the level.**
+    ///
+    /// Removal-by-zero is how the venue expresses it, so translating it into
+    /// something else here would be inventing a second vocabulary.
+    ///
+    /// Returns `false` if a new level could not be added because the side is
+    /// full. Refused rather than dropping the worst level: silently trimming
+    /// would make the book look thinner than the venue said, and a fill model
+    /// walking it would under-fill for a reason nothing recorded.
+    pub fn set(&mut self, px: Px, qty: Qty) -> bool {
+        let found = self.levels.iter().position(|l| l.px == px);
+        if qty.to_scaled() <= 0 {
+            if let Some(at) = found {
+                self.levels.remove(at);
+            }
+            return true;
+        }
+        if let Some(at) = found {
+            self.levels[at].qty = qty;
+            return true;
+        }
+        if self.levels.len() == self.levels.capacity() {
+            return false;
+        }
+        let at = self
+            .levels
+            .iter()
+            .position(|l| self.better(px, l.px))
+            .unwrap_or(self.levels.len());
+        self.levels.insert(at, Level { px, qty });
+        true
+    }
+
+    /// Forgets every level, for a snapshot that replaces the side.
+    pub fn clear(&mut self) {
+        self.levels.clear();
+    }
+}
+
 /// The rule that picks a valuation price.
 ///
 /// A policy decision stated at the call site, not "whatever price was handy"
@@ -135,6 +247,13 @@ pub enum Applied {
         /// The timestamp already stored for this instrument and event kind.
         stored: ExchangeTime,
     },
+    /// A book update carried more levels than the buffer holds.
+    ///
+    /// The whole update is dropped and the book is unchanged. Refused rather
+    /// than truncated: a partly applied update is a book the venue never
+    /// published, and a fill model walking it would under-fill for a reason
+    /// nothing in the log explains (ADR, order-book depth D-2).
+    UpdateTooLarge,
     /// The instrument id is outside the configured range. A configuration
     /// error, not a market condition.
     UnknownInstrument,
@@ -150,6 +269,18 @@ pub struct Books {
     tops: Vec<Option<TopOfBook>>,
     trades: Vec<Option<LastTrade>>,
     out_of_order: Vec<u32>,
+    /// Depth per instrument, bids and asks. Empty until a depth feed arrives;
+    /// a top-of-book-only session never touches it (ADR, order-book depth D-3).
+    bids: Vec<Depth>,
+    asks: Vec<Depth>,
+    /// Levels of the update in flight, not yet in force.
+    ///
+    /// D-2: between the first level of an update and its completion the book
+    /// can be crossed, which is a state the venue never published. Nothing sees
+    /// it, so the levels wait here.
+    pending: Vec<(InstrumentId, Side, Px, Qty)>,
+    /// Updates refused for carrying more levels than the buffer holds.
+    overflowed: u64,
 }
 
 impl Books {
@@ -158,11 +289,47 @@ impl Books {
     /// Sized once at session start. Nothing here grows afterwards, so the hot
     /// path never allocates.
     pub fn with_instruments(count: usize) -> Books {
+        Books::with_depth(count, DEFAULT_DEPTH, DEFAULT_PENDING)
+    }
+
+    /// Storage sized for a depth feed.
+    ///
+    /// `depth` is levels a side, and `pending` is the most levels one update
+    /// may carry. Both are fixed here so the hot path never allocates.
+    pub fn with_depth(count: usize, depth: usize, pending: usize) -> Books {
         Books {
             tops: vec![None; count],
             trades: vec![None; count],
             out_of_order: vec![0; count],
+            bids: (0..count)
+                .map(|_| Depth::with_capacity(Side::Buy, depth))
+                .collect(),
+            asks: (0..count)
+                .map(|_| Depth::with_capacity(Side::Sell, depth))
+                .collect(),
+            pending: Vec::with_capacity(pending),
+            overflowed: 0,
         }
+    }
+
+    /// The resting size on one side of an instrument, best price first.
+    #[inline]
+    pub fn depth(&self, instrument: InstrumentId, side: Side) -> Option<&Depth> {
+        let index = instrument.index();
+        match side {
+            Side::Buy => self.bids.get(index),
+            Side::Sell => self.asks.get(index),
+        }
+    }
+
+    /// Book updates refused for carrying more levels than the buffer holds.
+    ///
+    /// A number that is not zero means this session was fed a book it could not
+    /// represent, and every fill model that walked it was walking a partial
+    /// one. Counted rather than logged, like the out-of-order refusals.
+    #[inline]
+    pub const fn overflowed_updates(&self) -> u64 {
+        self.overflowed
     }
 
     /// How many instruments this store was built for.
@@ -197,6 +364,12 @@ impl Books {
         let stored = match ev.kind {
             MarketKind::Quote { .. } => self.tops[index].map(|t| t.exchange_time),
             MarketKind::Trade { .. } => self.trades[index].map(|t| t.exchange_time),
+            // A run of levels is one update. Ordering is checked when it
+            // completes, because the levels within it share a timestamp and
+            // checking each against the last would refuse the update's own
+            // second level.
+            MarketKind::Level { .. } => None,
+            MarketKind::BookApplied => self.tops[index].map(|t| t.exchange_time),
         };
         if let Some(stored) = stored
             && ev.exchange_time < stored
@@ -227,6 +400,44 @@ impl Books {
                     aggressor,
                     exchange_time: ev.exchange_time,
                 });
+            }
+            MarketKind::Level { side, px, qty } => {
+                if self.pending.len() == self.pending.capacity() {
+                    // Refused, not truncated: half a book applied is worse than
+                    // none, and a model walking it would under-fill for a
+                    // reason nothing recorded (ADR D-2).
+                    self.pending.clear();
+                    self.overflowed = self.overflowed.saturating_add(1);
+                    return Applied::UpdateTooLarge;
+                }
+                self.pending.push((ev.instrument, side, px, qty));
+            }
+            MarketKind::BookApplied => {
+                let mut full = false;
+                for (instrument, side, px, qty) in self.pending.drain(..) {
+                    let at = instrument.index();
+                    let book = match side {
+                        Side::Buy => &mut self.bids[at],
+                        Side::Sell => &mut self.asks[at],
+                    };
+                    full |= !book.set(px, qty);
+                }
+                if full {
+                    self.overflowed = self.overflowed.saturating_add(1);
+                }
+                // The top of book now follows from the depth, so a depth feed
+                // and a quote feed leave `top()` meaning the same thing (D-3).
+                let bid = self.bids[index].best();
+                let ask = self.asks[index].best();
+                if let (Some(bid), Some(ask)) = (bid, ask) {
+                    self.tops[index] = Some(TopOfBook {
+                        bid_px: bid.px,
+                        bid_qty: bid.qty,
+                        ask_px: ask.px,
+                        ask_qty: ask.qty,
+                        exchange_time: ev.exchange_time,
+                    });
+                }
             }
         }
         Applied::Accepted

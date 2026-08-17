@@ -94,6 +94,8 @@ fn kind_and_flags(event: &Event) -> (u8, u8) {
             match m.kind {
                 MarketKind::Quote { .. } => QUOTE,
                 MarketKind::Trade { .. } => TRADE,
+                MarketKind::Level { .. } => BOOK_LEVEL,
+                MarketKind::BookApplied => BOOK_APPLIED,
             },
             0,
         ),
@@ -140,6 +142,12 @@ fn write_payload(event: &Event, w: &mut Writer<'_>) {
                     w.i64(ask_px.to_scaled());
                     w.i64(ask_qty.to_scaled());
                 }
+                MarketKind::Level { side, px, qty } => {
+                    w.u8(side_to_wire(side));
+                    w.i64(px.to_scaled());
+                    w.i64(qty.to_scaled());
+                }
+                MarketKind::BookApplied => {}
                 MarketKind::Trade { px, qty, aggressor } => {
                     w.i64(px.to_scaled());
                     w.i64(qty.to_scaled());
@@ -252,23 +260,28 @@ fn write_payload(event: &Event, w: &mut Writer<'_>) {
 
 fn read_payload(kind: u8, flags: u8, r: &mut Reader<'_>) -> Result<Event, CodecError> {
     let event = match kind {
-        QUOTE | TRADE => {
+        QUOTE | TRADE | BOOK_LEVEL | BOOK_APPLIED => {
             let instrument = InstrumentId::new(r.u32()?);
             let exchange_time = Timestamp::from_nanos(r.i64()?);
             let receive_time = Timestamp::from_nanos(r.i64()?);
-            let market_kind = if kind == QUOTE {
-                MarketKind::Quote {
+            let market_kind = match kind {
+                QUOTE => MarketKind::Quote {
                     bid_px: Px::from_scaled(r.i64()?),
                     bid_qty: Qty::from_scaled(r.i64()?),
                     ask_px: Px::from_scaled(r.i64()?),
                     ask_qty: Qty::from_scaled(r.i64()?),
-                }
-            } else {
-                MarketKind::Trade {
+                },
+                TRADE => MarketKind::Trade {
                     px: Px::from_scaled(r.i64()?),
                     qty: Qty::from_scaled(r.i64()?),
                     aggressor: side_from_wire(r.u8()?)?,
-                }
+                },
+                BOOK_LEVEL => MarketKind::Level {
+                    side: side_from_wire(r.u8()?)?,
+                    px: Px::from_scaled(r.i64()?),
+                    qty: Qty::from_scaled(r.i64()?),
+                },
+                _ => MarketKind::BookApplied,
             };
             Event::In(Inbound::Market(MarketEvent {
                 instrument,

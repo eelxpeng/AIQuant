@@ -189,6 +189,48 @@ jobs:
           # No network here: the lag is read from the recording's own stamps.
           cargo run -p journal --locked --offline -- "$paper_log" | grep -q "feed lag"
 
+          # A depth feed, through the same line protocol. No network: the levels
+          # are written by hand, exactly as the bridge would emit them.
+          depth_md="${RUNNER_TEMP:-/tmp}/smoke-depth.txt"
+          depth_log="${RUNNER_TEMP:-/tmp}/smoke-depth.log"
+          rm -f "$depth_md" "${depth_log%.log}".*.log
+          # A delta feed: each update removes the levels it replaces. A fixture
+          # that only ever adds accumulates prices until the book is crossed,
+          # which the gate then refuses as having no usable market data — a real
+          # mistake to make once and not worth making in CI.
+          prev=""
+          for i in $(seq 1 120); do
+            t=$((1700000000000000000 + i * 100000000))
+            p=$((100 + i % 20))
+            if [ -n "$prev" ]; then
+              echo "L SMOKE $t B $prev.00 0"
+              echo "L SMOKE $t B $((prev - 1)).00 0"
+              echo "L SMOKE $t S $((prev + 1)).00 0"
+              echo "L SMOKE $t S $((prev + 2)).00 0"
+            fi
+            echo "L SMOKE $t B $p.00 3"
+            echo "L SMOKE $t B $((p - 1)).00 9"
+            echo "L SMOKE $t S $((p + 1)).00 2"
+            echo "L SMOKE $t S $((p + 2)).00 8"
+            echo "A SMOKE $t"
+            echo "T SMOKE $((t + 50000000)) $p.50 1 B"
+            prev=$p
+          done > "$depth_md"
+          cargo run -p paper --locked --offline -- "$conf" "$depth_md" "$depth_log" < /dev/null > /dev/null
+          cargo run -p journal --locked --offline -- "$depth_log" --all | grep -q "book update applied"
+          # Walking the book must reach a size the touch model cannot, which is
+          # the entire reason depth exists.
+          # An order for 5 against a touch of 2 completes only if it can walk.
+          # Without depth the strategy re-orders the shortfall for ever and
+          # never reaches its target size, so it submits far more orders. Fewer
+          # orders is the signal that they are actually finishing.
+          touch_orders=$(cargo run -p backtest --locked --offline -- "$depth_log" "$conf" \
+            | awk '/^  orders submitted/ {print $3; exit}')
+          walk_orders=$(cargo run -p backtest --locked --offline -- "$depth_log" "$conf" --walk-book \
+            | awk '/^  orders submitted/ {print $3; exit}')
+          echo "orders: touch=$touch_orders walk=$walk_orders"
+          test "$walk_orders" -lt "$touch_orders"
+
           # A sweep over the recording: a grid of variants, split in and out of
           # sample. The nag when there is no split is load-bearing, so it is
           # checked too — a sweep whose top row gets picked with no

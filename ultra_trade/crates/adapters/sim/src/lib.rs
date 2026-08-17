@@ -47,6 +47,24 @@ pub enum FillModel {
     /// Being at the front of the queue is the optimistic part — a real queue
     /// position would fill less and later.
     TouchDisplayed,
+    /// A marketable order eats levels from the touch outwards.
+    ///
+    /// Each level fills at **its own price** and is reported separately, which
+    /// is what a real venue does and what makes the cost of size visible: an
+    /// order larger than the touch pays worse prices for the rest of it rather
+    /// than getting the touch price for all of it.
+    ///
+    /// **Assumptions**: the book would have sat still while we ate it, and we
+    /// are ahead of everyone else queued at each level. Both are optimistic.
+    /// Market impact is not modelled — the recorded book is what the market
+    /// showed *without* our order in it (ADR, order-book depth).
+    ///
+    /// With no depth beyond the touch this is exactly [`TouchDisplayed`]: it
+    /// fills what the touch shows and stops, rather than inventing liquidity
+    /// the recording never contained.
+    ///
+    /// [`TouchDisplayed`]: FillModel::TouchDisplayed
+    WalkBook,
 }
 
 /// Fees, expressed as money per unit traded.
@@ -196,7 +214,7 @@ impl SimVenue {
     fn available(&self, top: &TopOfBook, side: Side, want: Qty) -> Qty {
         match self.model {
             FillModel::TouchUnlimited => want,
-            FillModel::TouchDisplayed => {
+            FillModel::TouchDisplayed | FillModel::WalkBook => {
                 let displayed = top.taker_qty(side);
                 if displayed.to_scaled() < want.to_scaled() {
                     displayed
@@ -236,6 +254,9 @@ impl SimVenue {
         if !top.is_two_sided() || !Self::is_marketable(&top, order.side(), order.kind()) {
             return order.qty();
         }
+        if self.model == FillModel::WalkBook {
+            return self.walk_book(order, &top);
+        }
         let take = self.available(&top, order.side(), order.qty());
         if take.to_scaled() <= 0 {
             return order.qty();
@@ -244,6 +265,59 @@ impl SimVenue {
         let fee = self.fee_for(true, take);
         self.report(order.id(), VenueKind::Filled { px, qty: take, fee });
         Qty::from_scaled(order.qty().to_scaled() - take.to_scaled())
+    }
+
+    /// Eats levels from the touch outwards, reporting each at its own price.
+    ///
+    /// Returns what could not be filled. A limit order stops at its own price
+    /// rather than paying through it, which is the whole point of a limit.
+    fn walk_book(&mut self, order: &Order, top: &TopOfBook) -> Qty {
+        // The side we take from is the opposite of ours: a buyer lifts asks.
+        let from = match order.side() {
+            Side::Buy => Side::Sell,
+            Side::Sell => Side::Buy,
+        };
+        let limit = order.kind().limit_px();
+        let acceptable = |px: Px| match (limit, order.side()) {
+            (None, _) => true,
+            (Some(limit), Side::Buy) => px.to_scaled() <= limit.to_scaled(),
+            (Some(limit), Side::Sell) => px.to_scaled() >= limit.to_scaled(),
+        };
+
+        // Copied out before reporting, because reporting borrows self. A depth
+        // feed is a handful of levels, so this is a small fixed-size read.
+        let mut plan: Vec<(Px, Qty)> = Vec::new();
+        let mut left = order.qty().to_scaled();
+        match self.books.depth(order.instrument(), from) {
+            Some(depth) if !depth.is_empty() => {
+                for level in depth.levels() {
+                    if left <= 0 || !acceptable(level.px) {
+                        break;
+                    }
+                    let take = left.min(level.qty.to_scaled());
+                    if take > 0 {
+                        plan.push((level.px, Qty::from_scaled(take)));
+                        left -= take;
+                    }
+                }
+            }
+            // No depth recorded, so there is nothing behind the touch to walk.
+            // Fill what the touch shows and stop, rather than inventing the
+            // rest: this is `TouchDisplayed`, deliberately.
+            _ => {
+                let take = left.min(top.taker_qty(order.side()).to_scaled());
+                if take > 0 && acceptable(top.taker_px(order.side())) {
+                    plan.push((top.taker_px(order.side()), Qty::from_scaled(take)));
+                    left -= take;
+                }
+            }
+        }
+
+        for (px, qty) in plan {
+            let fee = self.fee_for(true, qty);
+            self.report(order.id(), VenueKind::Filled { px, qty, fee });
+        }
+        Qty::from_scaled(left)
     }
 
     /// Fills resting orders against a trade print.

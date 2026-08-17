@@ -215,7 +215,7 @@ one exists. That is what keeps a test able to build a session in three lines.
 | `harness` | one configured run over a recording, and splitting one | which tool asked for it |
 | `simkit` | scripted feeds and fixtures — test scaffolding only | production adapters |
 
-**25,700 lines, 454 tests, zero third-party dependencies** in the trading path.
+**26,600 lines, 478 tests, zero third-party dependencies** in the trading path.
 `proptest` and `trybuild` are dev-only.
 
 ---
@@ -410,6 +410,39 @@ Three rules make the number trustworthy rather than merely bigger:
 The book is rebuilt from the log to get the mark, so the report cannot disagree
 with the session about what a price was — including which events the book
 *refused* as out of order.
+
+---
+
+## 6d. What size costs
+
+Until depth, every recording carried **top of book only**, so a fill model
+could not answer the one question that matters to a strategy trading size:
+what happens to the part of my order that is bigger than the touch?
+
+A book update is a run of records — one per changed level, then a marker that
+puts the whole update in force. Ten levels a side does not fit an 80-byte
+record and the fixed size is what makes seeking arithmetic, so the run is the
+compromise (`adr/1-order-book-depth.md`). **Nothing downstream ever sees half an
+update**: part-way through, the best bid can sit above the best ask, and a
+crossed book is a state the venue never published.
+
+`FillModel::WalkBook` then eats levels outwards, each at its own price. On a
+synthetic book with 2 at the touch and 8 behind it, a strategy asking for 5:
+
+```text
+                  orders  fills  ends at
+  TouchDisplayed      49     49   +2.000   never reaches its target size
+  WalkBook            12     24   -5.000   gets there, and pays for it
+```
+
+The old model is not merely optimistic — under it the strategy **could not
+execute at all**, so it re-ordered the shortfall forty-nine times and the
+backtest was quietly measuring a smaller strategy than the one configured.
+
+**What it still does not buy**, because depth invites the belief that a
+backtest is now realistic: market impact (the book would not have sat still
+while we ate it), queue position, and hidden liquidity. Walking a recorded book
+is strictly less wrong than assuming the touch is infinite. It is not right.
 
 ---
 

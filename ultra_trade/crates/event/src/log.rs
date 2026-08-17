@@ -12,7 +12,12 @@ use core::fmt;
 /// Stamped on every record from the first release, so that changing the value
 /// representation later is a supported migration rather than a break. ADR #4
 /// raised this; retrofitting it after logs exist is the expensive order.
-pub const FORMAT_VERSION: u16 = 1;
+/// Version 2 added the book-level records that carry depth. Version 1, which
+/// carried top of book only, stays readable: the reader refuses a version
+/// *greater* than it knows and no lower one, and `log_file.rs` has a test
+/// that says so — "old recordings still read" is exactly the claim that rots
+/// without one.
+pub const FORMAT_VERSION: u16 = 2;
 
 /// A record's position in the log.
 ///
