@@ -37,7 +37,7 @@ use event::{BackgroundLog, EngineState, Segments};
 use live_feed::{LiveFeed, Symbols, SystemClock, commands_from};
 use recovery::recover;
 use sim_venue::{Fees, FillModel, Queue, SimVenue};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::time::{Duration, Instant};
 use types::{Clock as _, ExchangeSpan, OrderId, Px, StrategyId, Timestamp};
 
@@ -53,6 +53,9 @@ fn usage() -> ! {
     eprintln!();
     eprintln!("operator commands are read from stdin: halt, resume, kill, flatten");
     eprintln!();
+    eprintln!("  --commands <path>  read them from a named pipe instead, so a separate");
+    eprintln!("                     process can send them (see tools/ui-console.py)");
+    eprintln!();
     eprintln!("feed protocol, one event per line:");
     eprintln!("  Q <symbol> <exchange_nanos> <bid_px> <bid_qty> <ask_px> <ask_qty>");
     eprintln!("  T <symbol> <exchange_nanos> <px> <qty> <B|S>");
@@ -65,7 +68,17 @@ fn fail(context: &str, e: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--commands <path>` before the positionals are counted, so the three
+    // required arguments stay three.
+    let mut command_path: Option<String> = None;
+    if let Some(at) = args.iter().position(|a| a == "--commands") {
+        if at + 1 >= args.len() {
+            usage();
+        }
+        command_path = Some(args.remove(at + 1));
+        args.remove(at);
+    }
     if args.len() != 3 {
         usage();
     }
@@ -118,15 +131,39 @@ fn main() {
         symbols.add(instrument.symbol.clone(), instrument.id);
     }
 
-    // Standard input is either the market data or the operator's console. It
-    // cannot be both, and pretending otherwise would silently eat commands.
-    let (source, commands): (Box<dyn std::io::Read + Send>, _) = if source_path == "-" {
-        (Box::new(std::io::stdin()), None)
-    } else {
-        let file = File::open(source_path)
-            .unwrap_or_else(|e| fail(&format!("cannot open {source_path}"), e));
-        (Box::new(file), Some(commands_from(std::io::stdin())))
+    // Where the operator's commands come from. A path — in practice a named
+    // pipe — lets a separate process send them, which is what the console
+    // needs: standard input belongs to whoever launched this process, so
+    // nothing else can reach it (ADR, operator UI contract).
+    let control: Option<Box<dyn std::io::Read + Send>> = match &command_path {
+        Some(path) => {
+            // Opened read *and* write on purpose. A pipe opened read-only
+            // blocks until a writer appears, and then reports end-of-file the
+            // moment the last one leaves — so a console that reconnects would
+            // find the session had stopped listening. Holding a writer end
+            // ourselves means neither happens.
+            let pipe = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .unwrap_or_else(|e| fail(&format!("cannot open {path}"), e));
+            Some(Box::new(pipe))
+        }
+        // Standard input is either the market data or the operator's console.
+        // It cannot be both, and pretending otherwise would silently eat
+        // commands.
+        None if source_path != "-" => Some(Box::new(std::io::stdin())),
+        None => None,
     };
+    let source: Box<dyn std::io::Read + Send> = if source_path == "-" {
+        Box::new(std::io::stdin())
+    } else {
+        Box::new(
+            File::open(source_path)
+                .unwrap_or_else(|e| fail(&format!("cannot open {source_path}"), e)),
+        )
+    };
+    let commands = control.map(commands_from);
 
     let mut feed = LiveFeed::spawn(source, symbols, clock.clone(), commands);
 
@@ -208,10 +245,10 @@ fn main() {
         }
         println!("  state          HALTED — type `resume` to trade again");
     }
-    if source_path == "-" {
-        println!("  commands       disabled (stdin is the market source)");
-    } else {
-        println!("  commands       halt | resume | kill | flatten");
+    match (&command_path, source_path.as_str()) {
+        (Some(path), _) => println!("  commands       {path} — halt | resume | kill | flatten"),
+        (None, "-") => println!("  commands       disabled (stdin is the market source)"),
+        (None, _) => println!("  commands       stdin — halt | resume | kill | flatten"),
     }
     println!();
 

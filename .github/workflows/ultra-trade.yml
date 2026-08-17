@@ -189,6 +189,34 @@ jobs:
           # No network here: the lag is read from the recording's own stamps.
           cargo run -p journal --locked --offline -- "$paper_log" | grep -q "feed lag"
 
+          # The machine-readable output the UI is built on. Checked by parsing
+          # it, because "it printed something" is not the property.
+          cargo run -p journal --locked --offline -- "$paper_log" --json --fills \
+            > "${RUNNER_TEMP:-/tmp}/session.json"
+          python3 -c "
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          assert d['session']['records'] > 0, 'no records'
+          assert isinstance(d['totals']['total'], str), 'money must not be a JSON number'
+          assert d['fills'], 'no fills'
+          " "${RUNNER_TEMP:-/tmp}/session.json"
+          cargo run -p sweep --locked --offline -- "$log" "$conf" \
+            --vary SMOKE.window=5,10 --json | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          assert len(d['runs']) == 2, d
+          "
+
+          # A session can be steered by another process, which is what the
+          # console needs. Commands are pre-written to a plain file so this
+          # needs no timing and no pipe.
+          ctl="${RUNNER_TEMP:-/tmp}/ctl"
+          steered="${RUNNER_TEMP:-/tmp}/steered.log"
+          rm -f "$ctl" "${steered%.log}".*.log
+          printf 'halt\nkill\n' > "$ctl"
+          cargo run -p paper --locked --offline -- --commands "$ctl" "$conf" "$md" "$steered" \
+            < /dev/null | grep -q "final state     Killed"
+
           # A depth feed, through the same line protocol. No network: the levels
           # are written by hand, exactly as the bridge would emit them.
           depth_md="${RUNNER_TEMP:-/tmp}/smoke-depth.txt"
@@ -197,6 +225,12 @@ jobs:
           # The bridge's own logic, with no network: a real checksum vector, the
           # timestamp parser against `datetime`, and the delta bookkeeping.
           python3 tools/test-kraken-stream.py
+
+          # The UI servers. No network beyond loopback and no live session:
+          # the test makes its own recording with `record`. The cases that
+          # matter are the refusals — the read-only viewer must not be able to
+          # send a command, and flatten must never be reported retry-safe.
+          python3 tools/test-ui.py
 
           # A delta feed: each update removes the levels it replaces. A fixture
           # that only ever adds accumulates prices until the book is crossed,

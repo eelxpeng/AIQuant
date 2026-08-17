@@ -91,6 +91,8 @@ struct Args {
     view: View,
     from: u64,
     to: u64,
+    /// Emit machine-readable output instead of a table.
+    json: bool,
 }
 
 fn parse_args() -> Result<Args, Fault> {
@@ -98,6 +100,7 @@ fn parse_args() -> Result<Args, Fault> {
     let mut view = View::Decisions;
     let mut from = 0u64;
     let mut to = u64::MAX;
+    let mut json = false;
 
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -105,6 +108,7 @@ fn parse_args() -> Result<Args, Fault> {
             "--all" => view = View::All,
             "--fills" => view = View::Fills,
             "--curve" => view = View::Curve,
+            "--json" => json = true,
             "--from" | "--to" => {
                 let raw = argv
                     .next()
@@ -131,10 +135,11 @@ fn parse_args() -> Result<Args, Fault> {
     }
 
     Ok(Args {
-        path: path.ok_or("usage: journal <recorded.log> [--all|--fills|--curve]")?,
+        path: path.ok_or("usage: journal <recorded.log> [--all|--fills|--curve] [--json]")?,
         view,
         from,
         to,
+        json,
     })
 }
 
@@ -177,6 +182,22 @@ fn run() -> Result<(), Fault> {
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
+
+    if args.json {
+        let summary = summarize(&records, header.instruments.len(), MARK_RULE)
+            .map_err(|e| format!("this recording does not add up: {e:?}"))?;
+        print_json(
+            &mut out,
+            &args,
+            &header,
+            &symbols,
+            &records,
+            &recovery,
+            segments.len(),
+            &summary,
+        )?;
+        return Ok(out.flush()?);
+    }
 
     if args.view == View::Curve {
         print_curve(&mut out, &records, &symbols)?;
@@ -741,4 +762,215 @@ impl Books {
             ),
         }
     }
+}
+
+// ---- machine-readable output ---------------------------------------------
+
+/// Quotes a string for JSON.
+///
+/// Symbols come from a recording's header, which is bytes a venue chose, so
+/// this escapes rather than assuming they are tame.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The whole report as one JSON object.
+///
+/// **Every money and quantity value is a string**, never a JSON number. JSON
+/// numbers are doubles, and putting a fixed-point price through one is exactly
+/// the round trip the `Px` and `Qty` types exist to prevent — `0.00018080`
+/// comes back `0.0001808`. A consumer that wants to plot a value parses it
+/// itself and takes that on knowingly.
+#[allow(clippy::too_many_arguments)]
+fn print_json(
+    out: &mut impl Write,
+    args: &Args,
+    header: &event::codec::LogHeader,
+    symbols: &[String],
+    records: &[Record],
+    recovery: &event::Recovery,
+    segments: usize,
+    summary: &report::SessionReport,
+) -> Result<(), Fault> {
+    let v = &summary.valuation;
+
+    writeln!(out, "{{")?;
+    writeln!(out, "  \"session\": {{")?;
+    writeln!(out, "    \"id\": \"{}\",", header.session_id)?;
+    writeln!(out, "    \"format\": {},", header.format_version)?;
+    writeln!(out, "    \"segments\": {segments},")?;
+    writeln!(out, "    \"records\": {},", summary.records)?;
+    writeln!(out, "    \"intact\": {},", recovery.is_clean())?;
+    writeln!(
+        out,
+        "    \"discarded_bytes\": {},",
+        recovery.discarded_bytes
+    )?;
+    // The span of market the recording covers, which is also how a viewer
+    // decides whether a session is still running: the last one grows.
+    let mut first = None;
+    let mut last = None;
+    for record in records {
+        if let Some(at) = record.event.as_inbound().and_then(|i| i.exchange_time()) {
+            first.get_or_insert(at.to_nanos());
+            last = Some(at.to_nanos().max(last.unwrap_or(i64::MIN)));
+        }
+    }
+    writeln!(out, "    \"first_event_nanos\": {},", first.unwrap_or(0))?;
+    writeln!(out, "    \"last_event_nanos\": {}", last.unwrap_or(0))?;
+    writeln!(out, "  }},")?;
+
+    writeln!(out, "  \"instruments\": [")?;
+    for (n, entry) in header.instruments.iter().enumerate() {
+        let comma = if n + 1 == header.instruments.len() {
+            ""
+        } else {
+            ","
+        };
+        writeln!(
+            out,
+            "    {{\"id\": {}, \"symbol\": {}, \"tick\": \"{}\", \"lot\": \"{}\"}}{comma}",
+            entry.id.raw(),
+            quoted(symbol_of(symbols, entry.id)),
+            entry.tick,
+            entry.lot
+        )?;
+    }
+    writeln!(out, "  ],")?;
+
+    writeln!(out, "  \"totals\": {{")?;
+    writeln!(out, "    \"orders\": {},", summary.orders_submitted)?;
+    writeln!(out, "    \"cancels\": {},", summary.cancels_submitted)?;
+    writeln!(out, "    \"fills\": {},", summary.fills)?;
+    writeln!(out, "    \"refused\": {},", summary.intents_rejected)?;
+    writeln!(out, "    \"realized\": \"{}\",", summary.realized)?;
+    writeln!(out, "    \"unrealized\": \"{}\",", v.unrealized)?;
+    writeln!(out, "    \"fees\": \"{}\",", summary.fees)?;
+    writeln!(out, "    \"total\": \"{}\",", v.total)?;
+    writeln!(out, "    \"max_drawdown\": \"{}\",", summary.max_drawdown)?;
+    writeln!(
+        out,
+        "    \"mark_rule\": {},",
+        quoted(&format!("{:?}", v.rule))
+    )?;
+    writeln!(out, "    \"complete\": {},", v.is_complete())?;
+    writeln!(
+        out,
+        "    \"state\": {}",
+        quoted(&format!("{:?}", summary.final_state))
+    )?;
+    writeln!(out, "  }},")?;
+
+    writeln!(out, "  \"refusals\": [")?;
+    for (n, (reason, count)) in summary.rejections.iter().enumerate() {
+        let comma = if n + 1 == summary.rejections.len() {
+            ""
+        } else {
+            ","
+        };
+        writeln!(
+            out,
+            "    {{\"reason\": {}, \"count\": {count}}}{comma}",
+            quoted(&format!("{reason:?}"))
+        )?;
+    }
+    writeln!(out, "  ],")?;
+
+    writeln!(out, "  \"positions\": [")?;
+    let held: Vec<_> = summary.positions.iter().collect();
+    for (n, position) in held.iter().enumerate() {
+        let comma = if n + 1 == held.len() { "" } else { "," };
+        let index = position.instrument().raw() as usize;
+        let unrealized = v
+            .unrealized_each
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|u| format!("\"{u}\""))
+            .unwrap_or_else(|| "null".to_string());
+        let mark = v
+            .marks
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|m| format!("\"{}\"", m.px))
+            .unwrap_or_else(|| "null".to_string());
+        writeln!(
+            out,
+            "    {{\"symbol\": {}, \"position\": \"{}\", \"realized\": \"{}\", \
+             \"unrealized\": {unrealized}, \"mark\": {mark}}}{comma}",
+            quoted(symbol_of(symbols, position.instrument())),
+            position.qty(),
+            position.realized()
+        )?;
+    }
+    writeln!(out, "  ],")?;
+
+    writeln!(out, "  \"book\": {{")?;
+    writeln!(out, "    \"resets\": {},", summary.book_resets)?;
+    writeln!(out, "    \"resyncs\": {}", summary.book_resyncs)?;
+    writeln!(out, "  }},")?;
+
+    match summary.feed_lag {
+        Some(lag) => {
+            writeln!(out, "  \"feed_lag_nanos\": {{")?;
+            writeln!(out, "    \"events\": {},", lag.events)?;
+            writeln!(out, "    \"min\": {},", lag.min)?;
+            writeln!(out, "    \"p50\": {},", lag.p50)?;
+            writeln!(out, "    \"p90\": {},", lag.p90)?;
+            writeln!(out, "    \"p99\": {},", lag.p99)?;
+            writeln!(out, "    \"max\": {}", lag.max)?;
+            write!(out, "  }}")?;
+        }
+        None => write!(out, "  \"feed_lag_nanos\": null")?,
+    }
+
+    // The fills, when asked for. Left out by default because a long session
+    // has tens of thousands and a caller that only wants the totals should not
+    // pay for them.
+    if matches!(args.view, View::Fills | View::Curve) {
+        writeln!(out, ",")?;
+        writeln!(out, "  \"fills\": [")?;
+        let mut books = Books::new(symbols.len());
+        let mut rows: Vec<String> = Vec::new();
+        for record in records {
+            let Some(fill) = books.apply(record)? else {
+                continue;
+            };
+            rows.push(format!(
+                "    {{\"seq\": {}, \"symbol\": {}, \"side\": {}, \"qty\": \"{}\", \
+                 \"px\": \"{}\", \"fee\": \"{}\", \"position\": \"{}\", \
+                 \"realized\": \"{}\", \"total_realized\": \"{}\"}}",
+                record.seq.raw(),
+                quoted(symbol_of(symbols, fill.instrument)),
+                quoted(&format!("{:?}", fill.side)),
+                fill.qty,
+                fill.px,
+                fill.fee,
+                fill.position,
+                fill.realized,
+                fill.total_realized,
+            ));
+        }
+        writeln!(out, "{}", rows.join(",\n"))?;
+        write!(out, "  ]")?;
+    }
+
+    writeln!(out)?;
+    writeln!(out, "}}")?;
+    Ok(())
 }

@@ -547,6 +547,47 @@ walk-forward is not built.
 
 ---
 
+## 7c. Somewhere to look
+
+```bash
+python3 tools/ui-view.py session.log                       # read-only, :8080
+python3 tools/ui-console.py session.log --commands /tmp/ctl # + buttons, :8081
+```
+
+```mermaid
+graph LR
+    P["bin/paper<br/>a running session"] -->|appends| L["session.0.log"]
+    L --> J["bin/journal --json"]
+    J --> V["tools/ui-view.py<br/><i>read only</i>"]
+    J --> C["tools/ui-console.py<br/><i>started deliberately</i>"]
+    C -->|"halt / resume / kill / flatten"| F["named pipe"]
+    F --> P
+```
+
+Four rules, from `adr/1-operator-ui-contract.md`, and each is visible in that
+picture:
+
+1. **Nothing is in the Rust workspace.** Both servers are Python standard
+   library; the page loads nothing from the internet and renders its own SVG.
+   The trading path still has zero third-party dependencies.
+2. **The UI never decodes a recording.** It calls `journal --json`. The format
+   has been bumped three times, and a second decoder would go quietly wrong the
+   first time it moved again.
+3. **Viewing and controlling are two programs.** The viewer has no write path
+   at all — a `POST` to it is refused with a message pointing at the console.
+   So the thing left open on a second monitor is not the thing that can flatten
+   a book.
+4. **A command is pending until the recording says otherwise.** Writing a line
+   to the pipe means the line was written, not that the engine acted. The page
+   watches for the engine's own record of it, and `flatten` is never retried
+   automatically because it is the one command that is not idempotent.
+
+Money crosses that boundary as **strings**, never JSON numbers. A JSON number
+is a double, and a fixed-point price through one comes back a different price —
+the same round trip the bridge avoids.
+
+---
+
 ## 8. What is not built
 
 So the map is not mistaken for the territory:
