@@ -93,6 +93,12 @@ struct Args {
     to: u64,
     /// Emit machine-readable output instead of a table.
     json: bool,
+    /// Most fills to include in JSON output.
+    ///
+    /// A session that runs for days has millions, and a caller polling every
+    /// second does not want them all down the wire every time. The summary is
+    /// always complete; only the array is trimmed, and it says by how much.
+    tail: usize,
 }
 
 fn parse_args() -> Result<Args, Fault> {
@@ -101,6 +107,7 @@ fn parse_args() -> Result<Args, Fault> {
     let mut from = 0u64;
     let mut to = u64::MAX;
     let mut json = false;
+    let mut tail = 2_000usize;
 
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -109,6 +116,12 @@ fn parse_args() -> Result<Args, Fault> {
             "--fills" => view = View::Fills,
             "--curve" => view = View::Curve,
             "--json" => json = true,
+            "--tail" => {
+                let raw = argv.next().ok_or("--tail needs a count")?;
+                tail = raw
+                    .parse()
+                    .map_err(|_| format!("--tail wants a count, got {raw:?}"))?;
+            }
             "--from" | "--to" => {
                 let raw = argv
                     .next()
@@ -135,11 +148,13 @@ fn parse_args() -> Result<Args, Fault> {
     }
 
     Ok(Args {
-        path: path.ok_or("usage: journal <recorded.log> [--all|--fills|--curve] [--json]")?,
+        path: path
+            .ok_or("usage: journal <recorded.log> [--all|--fills|--curve] [--json] [--tail N]")?,
         view,
         from,
         to,
         json,
+        tail,
     })
 }
 
@@ -990,7 +1005,6 @@ fn print_json(
     // pay for them.
     if matches!(args.view, View::Fills | View::Curve) {
         writeln!(out, ",")?;
-        writeln!(out, "  \"fills\": [")?;
         let mut books = Books::new(symbols.len());
         let mut rows: Vec<String> = Vec::new();
         for record in records {
@@ -1012,6 +1026,15 @@ fn print_json(
                 fill.total_realized,
             ));
         }
+        // Only the most recent, and the count of what was left out. A trimmed
+        // array that did not say so would look like a session that traded less
+        // than it did.
+        let omitted = rows.len().saturating_sub(args.tail);
+        if omitted > 0 {
+            rows.drain(..omitted);
+        }
+        writeln!(out, "  \"fills_omitted\": {omitted},")?;
+        writeln!(out, "  \"fills\": [")?;
         writeln!(out, "{}", rows.join(",\n"))?;
         write!(out, "  ]")?;
     }

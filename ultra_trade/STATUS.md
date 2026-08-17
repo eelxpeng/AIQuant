@@ -6,7 +6,7 @@ What is built, what is not, and where the work is up to.
 together. **This file says how far along it is** — the first thing to read
 before picking up work, and the thing to update when landing any.
 
-Today: **28,100 lines, 491 tests, 15 crates, 5 binaries, zero third-party
+Today: **28,300 lines, 491 tests, 15 crates, 5 binaries, zero third-party
 dependencies** in the trading path — and a UI that adds none.
 
 ---
@@ -36,11 +36,12 @@ ticks when it works end to end from a command line, not when its parts compile.
       than merely produced.
 - [x] **10 · Somewhere to look.** A web viewer and a separate operator console:
       watch a live session, read a recording, and press the four buttons.
-- [ ] **11 · Sustained operation.** ← **you are here.** Rung 8 run for days rather than minutes,
-      with the failures that only appear at that timescale.
+- [ ] **11 · Sustained operation.** ← **you are here**, and further along than
+      before: the cost of a long session is measured and two failures that only
+      appear at that timescale are fixed. What remains is running one for days.
 - [ ] **12 · Live.** Real orders, real money.
 
-Rungs 1–8 and 10 took PRs #7 to #36. Rung 12 is deliberately far away and nothing
+Rungs 1–8 and 10 took PRs #7 to #37. Rung 12 is deliberately far away and nothing
 below should be read as saying otherwise.
 
 ---
@@ -174,10 +175,28 @@ Making it harder to fool yourself.
       the budget, and there is no budget to cite against.
 - [ ] **End-to-end latency.** The two halves are measured separately; nothing
       measures wire to order.
-- [ ] **A multi-day paper session.** Everything run so far is seconds to
-      minutes. Log volume, background-writer backpressure, reconnects, resyncs
-      and recovery under real conditions are untested at the timescale that
-      matters. This is what earns rung 12, and no feature substitutes for it.
+- [x] **Measured what a long session costs** (#37). A real Kraken depth feed
+      runs at 112 records/s and 9 kB/s — 0.77 GB and 9.7M records a day.
+      `paper`'s memory stayed flat at 7.5 MB while the recording tripled, so
+      the write path holds.
+- [x] **A hot-path allocation nothing was watching** (#37). The engine could
+      always say when its next event would allocate; no binary asked. Past
+      ~4,000 orders a session allocates on the hot path in silence. `paper`
+      now warns and repeats it in the summary.
+- [x] **The read path paced and bounded** (#37). The page paces itself off the
+      last read's cost and the fills array says how much it omitted.
+- [ ] **An incremental read.** `journal` walks the whole recording every call —
+      ~10s after a day, over a minute after a week — so a live monitor is
+      O(n²) over a session. The format is already shaped for the fix: records
+      are fixed-size and addressable by arithmetic, so a reader could resume
+      from a sequence number instead of starting over.
+- [ ] **Reclaiming terminal orders.** Every order ever placed is retained, and
+      the id-to-index arithmetic depends on that, so this is a design question
+      rather than a small fix. It is what the allocation warning is really
+      about.
+- [ ] **An actual multi-day run.** The longest so far is minutes. Reconnects,
+      resyncs, recovery and disk pressure at that timescale are still
+      untested, and no measurement substitutes for having run it.
 
 ### 7 · Small, known, and deliberately left
 

@@ -200,6 +200,17 @@ jobs:
           assert isinstance(d['totals']['total'], str), 'money must not be a JSON number'
           assert d['fills'], 'no fills'
           " "${RUNNER_TEMP:-/tmp}/session.json"
+          # A long session's fills array must be bounded, and must say when it
+          # was trimmed — a short list that looked complete would read as a
+          # session that traded less than it did.
+          cargo run -p journal --locked --offline -- "$paper_log" --json --fills --tail 3 \
+            | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          assert len(d['fills']) <= 3, len(d['fills'])
+          assert d['fills_omitted'] == d['totals']['fills'] - len(d['fills']), d['fills_omitted']
+          "
+
           cargo run -p sweep --locked --offline -- "$log" "$conf" \
             --vary SMOKE.window=5,10 --json | python3 -c "
           import json, sys
@@ -216,6 +227,30 @@ jobs:
           printf 'halt\nkill\n' > "$ctl"
           cargo run -p paper --locked --offline -- --commands "$ctl" "$conf" "$md" "$steered" \
             < /dev/null | grep -q "final state     Killed"
+
+          # A session that outgrows its reserved capacity allocates on the hot
+          # path. The engine has always been able to say so and nothing asked,
+          # so a long session violated Constitution VI in silence.
+          many="${RUNNER_TEMP:-/tmp}/many.conf"
+          manymd="${RUNNER_TEMP:-/tmp}/many.txt"
+          manylog="${RUNNER_TEMP:-/tmp}/many.log"
+          rm -f "${manylog%.log}".*.log
+          cat > "$many" <<'MANY'
+          instrument A tick 0.01 lot 1 min 1
+          limits A max-position 5000 max-exposure 100000000 max-order-notional 5000000 max-orders 1000000 rate-window 60s max-quote-age 30s
+          strategy crossover A window 2 size 3
+          MANY
+          sed -i 's/^          //' "$many"
+          python3 -c "
+          base = 1700000000000000000
+          for i in range(9000):
+              t = base + i * 100000000
+              p = 100 + (i % 3) * 2
+              print(f'Q A {t} {p}.00 50 {p+1}.00 50')
+              print(f'T A {t+50000000} {p}.50 1 B')
+          " > "$manymd"
+          cargo run -p paper --locked --offline -- "$many" "$manymd" "$manylog" \
+            < /dev/null | grep -q "outgrew its reserved capacity"
 
           # A depth feed, through the same line protocol. No network: the levels
           # are written by hand, exactly as the bridge would emit them.

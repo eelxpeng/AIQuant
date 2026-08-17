@@ -593,6 +593,49 @@ the same round trip the bridge avoids.
 
 ---
 
+## 7d. What a long session does
+
+Measured on a real Kraken depth feed, two instruments, quoting one and
+crossing the other:
+
+```text
+  112 records/s, 9 kB/s          →  0.77 GB and 9.7M records in a day
+  paper's memory                    flat at 7.5 MB while the log grew 3x
+```
+
+**The write path holds up.** The engine is O(1) per event, the background
+writer appends, and the process does not grow: resident memory stayed put
+across the whole run while the recording tripled. That is the half that has to
+be right, and it is.
+
+**The read path is the one that does not scale.** `journal` walks the whole
+recording every time it is asked, at about a microsecond a record — fine at
+minutes, ten seconds a call after a day, over a minute after a week. The UI
+polled it every second.
+
+Two mitigations, and the real fix named rather than pretended:
+
+- The page **paces itself** off how long the last read took — roughly ten times
+  that, between one second and a minute — and says what it settled on. A fixed
+  timer would eventually have one read finishing as the next began.
+- The fills array is **bounded** and reports how many it left out. The summary
+  stays complete; a trimmed list that did not say so would read as a session
+  that traded less than it did.
+
+Neither makes the read cheap. A live monitor that recomputes an entire session
+from scratch every second is O(n²) over the session, and the fix is an
+incremental read the format is already shaped for — records are fixed-size and
+addressable by arithmetic. That is not built.
+
+**One thing was silently wrong.** The engine can say when its next event would
+allocate, and no binary asked. A session that outgrows its reserved capacity —
+about four thousand orders — starts allocating on the hot path, which
+Constitution VI forbids, and said nothing. `paper` now warns the moment it
+happens and repeats it in the summary, because a warning printed hours ago has
+scrolled away by the time anyone reads the result.
+
+---
+
 ## 8. What is not built
 
 So the map is not mistaken for the territory:

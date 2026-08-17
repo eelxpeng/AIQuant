@@ -273,6 +273,7 @@ fn main() {
     // session that placed them. Starting the counter past them keeps the
     // resumed session from reporting a crash's history as things it just did.
     let mut reported_orders = engine.orders().len();
+    let mut warned_allocation = false;
     let mut last_status = Instant::now();
 
     while let Some(event) = feed.next_event() {
@@ -297,6 +298,18 @@ fn main() {
                 );
             }
             reported_orders += 1;
+        }
+
+        // The engine can say when its next event would allocate. Nothing was
+        // asking, so a session long enough to outgrow its reserved capacity
+        // started allocating on the hot path and said nothing — which is a
+        // Constitution VI violation that only appears after hours.
+        if !warned_allocation && engine.would_allocate() {
+            warned_allocation = true;
+            eprintln!(
+                "paper: WARNING the engine has outgrown its reserved capacity and the \
+                 next event may allocate on the hot path"
+            );
         }
 
         if last_status.elapsed() >= STATUS_EVERY {
@@ -348,6 +361,14 @@ fn main() {
         );
     }
     say!("  final state     {state:?}");
+    if warned_allocation {
+        // Repeated at the end, because a warning printed hours ago has
+        // scrolled away by the time anyone reads the summary.
+        say!(
+            "  WARNING         the engine outgrew its reserved capacity during this \
+             session and may have allocated on the hot path"
+        );
+    }
 
     // Persist and say whether it worked, rather than dropping the answer.
     match engine.into_log().shutdown() {
