@@ -1,0 +1,13 @@
+{"timestamp": "2026-09-27T04:18:00.044949+00:00", "level": "INFO", "event": "session_start", "symbol": "AAPL", "account": "PA3GROPNZ45A", "starting_equity": 100000.0, "dry_run": true, "held_at_start": []}
+{"timestamp": "2026-09-27T04:18:00.311647+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:18:00.489184+00:00", "level": "INFO", "event": "session_end", "final_equity": 100000.0, "pnl": 0.0, "open_positions": []}
+{"timestamp": "2026-09-27T04:22:46.177842+00:00", "level": "INFO", "event": "session_start", "symbol": "AAPL", "account": "PA3GROPNZ45A", "starting_equity": 100000.0, "dry_run": true, "held_at_start": []}
+{"timestamp": "2026-09-27T04:22:46.442791+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:27:52.525683+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:32:59.633459+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:38:00.208540+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:43:00.786310+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:48:01.369414+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:53:02.258311+00:00", "level": "INFO", "event": "market_closed", "next_open": "2026-09-28 09:30:00-04:00"}
+{"timestamp": "2026-09-27T04:56:54.642673+00:00", "level": "WARNING", "event": "interrupted_by_operator"}
+{"timestamp": "2026-09-27T04:56:55.016136+00:00", "level": "INFO", "event": "session_end", "final_equity": 100000.0, "pnl": 0.0, "open_positions": []}
